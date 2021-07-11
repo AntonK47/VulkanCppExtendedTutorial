@@ -57,7 +57,7 @@ vk::Result returnValueOnSuccess(const vk::Result& result) { assert(result == vk:
 vk::PhysicalDevice pickPhysicalDevice(const std::vector<vk::PhysicalDevice>& physicalDevices)
 {
 	assert(!physicalDevices.empty());
-	for (vk::PhysicalDevice physicalDevice : physicalDevices)
+	for (auto physicalDevice : physicalDevices)
 	{
 		auto props = physicalDevice.getProperties();
 
@@ -120,7 +120,7 @@ vk::Device createDevice(const vk::PhysicalDevice physicalDevice, U32 familyIndex
 	return returnValueOnSuccess(physicalDevice.createDevice(deviceCreateInfo));
 }
 
-vk::Format getSwapchainFormat(vk::PhysicalDevice physicalDevice, vk::SurfaceKHR surface)
+vk::Format getSwapchainFormat(const vk::PhysicalDevice physicalDevice, const vk::SurfaceKHR surface)
 {
 	const auto formats = returnValueOnSuccess(physicalDevice.getSurfaceFormatsKHR(surface));
 
@@ -140,7 +140,7 @@ vk::Format getSwapchainFormat(vk::PhysicalDevice physicalDevice, vk::SurfaceKHR 
 	return formats[0].format;
 }
 
-vk::SwapchainKHR crateSwapchain(vk::Device device, vk::SurfaceKHR surface, vk::SurfaceCapabilitiesKHR surfaceCapabilities, U32 familyIndex, U32 width, U32 height, vk::Format format)
+vk::SwapchainKHR crateSwapchain(const vk::Device device, vk::SurfaceKHR surface, vk::SurfaceCapabilitiesKHR surfaceCapabilities, U32 familyIndex, U32 width, U32 height, vk::Format format)
 {
 	
 	auto supportedCompositeAlpha =
@@ -255,7 +255,7 @@ vk::ShaderModule loadShader(const vk::Device device, const char* path)
 	const auto file = fopen(path, "rb");  // NOLINT(clang-diagnostic-deprecated-declarations)
 	assert(file);
 	fseek(file, 0, SEEK_END);
-	const size_t length = static_cast<size_t>(ftell(file));
+	const auto length = static_cast<size_t>(ftell(file));
 	fseek(file, 0, SEEK_SET);
 	const auto buffer = new char[length];
 
@@ -466,13 +466,13 @@ int main()  // NOLINT(bugprone-exception-escape)
 	}
 
 	// Get WSI extensions from SDL (we can add more if we like - we just can't remove these)
-	unsigned extension_count;
-	if (!SDL_Vulkan_GetInstanceExtensions(window, &extension_count, nullptr)) {
+	unsigned extensionCount;
+	if (!SDL_Vulkan_GetInstanceExtensions(window, &extensionCount, nullptr)) {
 		std::cout << "Could not get the number of required instance extensions from SDL." << std::endl;
 		return 1;
 	}
-	auto extensions = std::vector<const char*>{ extension_count };
-	if (!SDL_Vulkan_GetInstanceExtensions(window, &extension_count, extensions.data()))
+	auto extensions = std::vector<const char*>{ extensionCount };
+	if (!SDL_Vulkan_GetInstanceExtensions(window, &extensionCount, extensions.data()))
 	{
 		std::cout << "Could not get the names of required instance extensions from SDL." << std::endl;
 		return 1;
@@ -526,13 +526,13 @@ int main()  // NOLINT(bugprone-exception-escape)
 
 
 	// Create a Vulkan surface for rendering
-	auto c_surface = VkSurfaceKHR{};
-	if (!SDL_Vulkan_CreateSurface(window, instance, &c_surface))
+	auto surfaceCType = vk::SurfaceKHR::CType{};
+	if (!SDL_Vulkan_CreateSurface(window, instance, &surfaceCType))
 	{
 		std::cout << "Could not create a Vulkan surface." << std::endl;
 		return 1;
 	}
-	auto surface = vk::SurfaceKHR{ c_surface };
+	auto surface = vk::SurfaceKHR{ surfaceCType };
 
 	auto physicalDevices = returnValueOnSuccess(instance.enumeratePhysicalDevices());
 	auto physicalDevice = pickPhysicalDevice(physicalDevices);
