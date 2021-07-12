@@ -35,9 +35,7 @@
 #pragma warning( disable : 4464 )
 #pragma warning( disable : 4820 )
 #include <boost/assert.hpp>
-#include <glm/glm.hpp>
 #include <SDL2/SDL.h>
-#include <SDL2/SDL_syswm.h>
 #include <SDL2/SDL_vulkan.h>
 #include <vulkan/vulkan.hpp>
 #pragma warning(pop)
@@ -54,24 +52,6 @@ T returnValueOnSuccess(const vk::ResultValue<T>& call) { assert(call.result == v
 
 vk::Result returnValueOnSuccess(const vk::Result& result) { assert(result == vk::Result::eSuccess); return result; }
 
-vk::PhysicalDevice pickPhysicalDevice(const std::vector<vk::PhysicalDevice>& physicalDevices)
-{
-	assert(!physicalDevices.empty());
-	for (auto physicalDevice : physicalDevices)
-	{
-		auto props = physicalDevice.getProperties();
-
-		if (props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
-		{
-			std::cout << "Picking discrete GPU: " << props.deviceName << "\n";
-			return physicalDevice;
-		}
-	}
-
-	auto props = physicalDevices[0].getProperties();
-	std::cout << "Picking fallback GPU: " << props.deviceName << "\n";
-	return physicalDevices[0];
-}
 
 void setupConsole(const std::wstring& title)
 {
@@ -84,7 +64,12 @@ void setupConsole(const std::wstring& title)
 	SetConsoleTitle(title.c_str());
 }
 
-U32 getGraphicsQueueFamilyIndex(vk::PhysicalDevice physicalDevice)
+bool supportPresentation(const vk::PhysicalDevice physicalDevice, const U32 familyIndex)
+{
+	return physicalDevice.getWin32PresentationSupportKHR(familyIndex);
+}
+
+U32 getGraphicsQueueFamilyIndex(const vk::PhysicalDevice physicalDevice)
 {
 	const auto properties = physicalDevice.getQueueFamilyProperties();
 	for (U32 i = 0; i < properties.size(); i++)
@@ -94,8 +79,47 @@ U32 getGraphicsQueueFamilyIndex(vk::PhysicalDevice physicalDevice)
 			return i;
 		}
 	}
-	BOOST_ASSERT_MSG(true, L"No graphics queue found!");
-	return 0;
+	return VK_QUEUE_FAMILY_IGNORED;
+}
+
+vk::PhysicalDevice pickPhysicalDevice(const std::vector<vk::PhysicalDevice>& physicalDevices)
+{
+	auto discrete = vk::PhysicalDevice{ nullptr };
+	auto fallback = vk::PhysicalDevice{ nullptr };
+
+	
+	BOOST_ASSERT(!physicalDevices.empty());
+	for (const auto physicalDevice : physicalDevices)
+	{
+		const auto familyIndex = getGraphicsQueueFamilyIndex(physicalDevice);
+		if(familyIndex == VK_QUEUE_FAMILY_IGNORED)
+		{
+			continue;
+		}
+		if(!supportPresentation(physicalDevice, familyIndex))
+		{
+			continue;
+		}
+		if (!discrete)
+		{
+			discrete = physicalDevice;
+		}
+		if(!fallback)
+		{
+			fallback = physicalDevice;
+		}
+	}
+	const auto result = discrete ? discrete : fallback;
+	if(result)
+	{
+		const auto props = result.getProperties();
+		std::cout << "Picking discrete GPU: " << props.deviceName << "\n";
+	}
+	else
+	{
+		std::cout << "ERROR: Np GPUs found!\n";
+	}
+	return result;
 }
 
 vk::Device createDevice(const vk::PhysicalDevice physicalDevice, U32 familyIndex)
@@ -140,13 +164,19 @@ vk::Format getSwapchainFormat(const vk::PhysicalDevice physicalDevice, const vk:
 	return formats[0].format;
 }
 
-vk::SwapchainKHR crateSwapchain(const vk::Device device, vk::SurfaceKHR surface, vk::SurfaceCapabilitiesKHR surfaceCapabilities, U32 familyIndex, U32 width, U32 height, vk::Format format)
+vk::SwapchainKHR createSwapchain(const vk::Device device, vk::SurfaceKHR surface,
+                                 vk::SurfaceCapabilitiesKHR surfaceCapabilities, U32 familyIndex, U32 width, U32 height,
+                                 vk::Format format, vk::SwapchainKHR oldSwapchain)
 {
 	
 	auto supportedCompositeAlpha =
 		surfaceCapabilities.supportedCompositeAlpha & vk::CompositeAlphaFlagBitsKHR::eOpaque ? vk::CompositeAlphaFlagBitsKHR::eOpaque :
-		surfaceCapabilities.supportedCompositeAlpha & vk::CompositeAlphaFlagBitsKHR::ePreMultiplied ? vk::CompositeAlphaFlagBitsKHR::ePreMultiplied :
-		surfaceCapabilities.supportedCompositeAlpha & vk::CompositeAlphaFlagBitsKHR::ePostMultiplied ? vk::CompositeAlphaFlagBitsKHR::ePostMultiplied :
+		surfaceCapabilities.supportedCompositeAlpha & vk::CompositeAlphaFlagBitsKHR::ePreMultiplied
+		? vk::CompositeAlphaFlagBitsKHR::ePreMultiplied
+		:
+		surfaceCapabilities.supportedCompositeAlpha & vk::CompositeAlphaFlagBitsKHR::ePostMultiplied
+		? vk::CompositeAlphaFlagBitsKHR::ePostMultiplied
+		:
 		vk::CompositeAlphaFlagBitsKHR::eInherit;
 
 	const auto swapchainCreateInfo = vk::SwapchainCreateInfoKHR
@@ -167,7 +197,8 @@ vk::SwapchainKHR crateSwapchain(const vk::Device device, vk::SurfaceKHR surface,
 		.pQueueFamilyIndices = std::array<U32,1>{ familyIndex }.data(),
 		.preTransform = surfaceCapabilities.currentTransform,
 		.compositeAlpha = supportedCompositeAlpha,
-		.presentMode = vk::PresentModeKHR::eFifo
+		.presentMode = vk::PresentModeKHR::eFifo,
+		.oldSwapchain = oldSwapchain
 	};
 	return returnValueOnSuccess(device.createSwapchainKHR(swapchainCreateInfo));
 }
@@ -214,7 +245,8 @@ vk::RenderPass createRenderPass(const vk::Device device, vk::Format format)
 	return returnValueOnSuccess(device.createRenderPass(createInfo));
 }
 
-vk::Framebuffer createFramebuffer(const vk::Device device, vk::RenderPass renderPass, vk::ImageView imageView, U32 width, U32 height)
+vk::Framebuffer createFramebuffer(const vk::Device device, vk::RenderPass renderPass, vk::ImageView imageView,
+                                  U32 width, U32 height)
 {
 	const auto createInfo = vk::FramebufferCreateInfo
 	{
@@ -282,7 +314,9 @@ vk::PipelineLayout createPipelineLayout(const vk::Device device)
 	return returnValueOnSuccess(device.createPipelineLayout(createInfo));
 }
 
-vk::Pipeline createGraphicsPipeline(vk::Device device, vk::PipelineCache pipelineCache, vk::RenderPass renderPass, vk::PipelineLayout pipelineLayout, vk::ShaderModule triangleVertexShader, vk::ShaderModule triangleFragmentShader)
+vk::Pipeline createGraphicsPipeline(vk::Device device, vk::PipelineCache pipelineCache, vk::RenderPass renderPass,
+                                    vk::PipelineLayout pipelineLayout, vk::ShaderModule triangleVertexShader,
+                                    vk::ShaderModule triangleFragmentShader)
 {
 	auto stages = std::array<vk::PipelineShaderStageCreateInfo, 2>
 	{
@@ -374,19 +408,17 @@ vk::Pipeline createGraphicsPipeline(vk::Device device, vk::PipelineCache pipelin
 }
 
 
-VkBool32 debugReportCallback(
-	VkDebugReportFlagsEXT flags,
-	[[maybe_unused]] VkDebugReportObjectTypeEXT objectType,
-	[[maybe_unused]] uint64_t object,
-	[[maybe_unused]] size_t location,
-	[[maybe_unused]] int32_t messageCode,
-	[[maybe_unused]] const char* pLayerPrefix,
-	const char* pMessage,
-	[[maybe_unused]] void* pUserData)
+VkBool32 debugReportCallback(VkDebugReportFlagsEXT flags, [[maybe_unused]] VkDebugReportObjectTypeEXT objectType,
+                             [[maybe_unused]] uint64_t object, [[maybe_unused]] size_t location,
+                             [[maybe_unused]] int32_t messageCode, [[maybe_unused]] const char* pLayerPrefix,
+                             const char* pMessage, [[maybe_unused]] void* pUserData)
 {
 	
-	const auto level = vk::to_string(flags & static_cast<U32>(vk::DebugReportFlagBitsEXT::eError) ? vk::DebugReportFlagBitsEXT::eError
-		                                 : flags & (static_cast<U32>(vk::DebugReportFlagBitsEXT::eWarning) | static_cast<U32>(vk::DebugReportFlagBitsEXT::ePerformanceWarning)) ? vk::DebugReportFlagBitsEXT::eWarning
+	const auto level = vk::to_string(flags & static_cast<U32>(vk::DebugReportFlagBitsEXT::eError)
+		                                 ? vk::DebugReportFlagBitsEXT::eError
+		                                 : flags & (static_cast<U32>(vk::DebugReportFlagBitsEXT::eWarning) | static_cast
+			                                 <U32>(vk::DebugReportFlagBitsEXT::ePerformanceWarning))
+		                                 ? vk::DebugReportFlagBitsEXT::eWarning
 		                                 : vk::DebugReportFlagBitsEXT::eInformation);
 
 	std::cout << "[" << level << "]: " << pMessage << std::endl;
@@ -399,21 +431,18 @@ vk::DebugReportCallbackEXT registerDebugCallback(const vk::Instance instance)
 {
 	const auto createInfo = vk::DebugReportCallbackCreateInfoEXT
 	{
-		.flags = vk::DebugReportFlagBitsEXT::eError | vk::DebugReportFlagBitsEXT::eWarning | vk::DebugReportFlagBitsEXT::ePerformanceWarning | vk::DebugReportFlagBitsEXT::eInformation,
+		.flags = vk::DebugReportFlagBitsEXT::eError | vk::DebugReportFlagBitsEXT::eWarning |
+		vk::DebugReportFlagBitsEXT::ePerformanceWarning | vk::DebugReportFlagBitsEXT::eInformation,
 		.pfnCallback = debugReportCallback
 	};
 
-
-	//instance.getProcAddr("vkCreateDebugReportCallbackEXT");
 	return returnValueOnSuccess(instance.createDebugReportCallbackEXT(createInfo));
 }
 
 vk::ImageMemoryBarrier imageBarrier(vk::Image image,
-                                    [[maybe_unused]] vk::PipelineStageFlags srcStageMask,
 	vk::AccessFlags srcAccessMask,
-	vk::ImageLayout oldLayout,
-	[[maybe_unused]] vk::PipelineStageFlags dstStageMask,
 	vk::AccessFlags dstAccessMask,
+	vk::ImageLayout oldLayout,
 	vk::ImageLayout newLayout)
 {
 	return vk::ImageMemoryBarrier
@@ -435,9 +464,73 @@ vk::ImageMemoryBarrier imageBarrier(vk::Image image,
 	};
 }
 
-void pipelineBarrierImage([[maybe_unused]] vk::CommandBuffer commandBuffer, [[maybe_unused]] vk::ImageMemoryBarrier barrier)
+struct Swapchain
 {
-	//commandBuffer.pipelineBarrier()
+	vk::SwapchainKHR swapchain;
+	std::vector<vk::Image> images;
+	std::vector<vk::Framebuffer> framebuffers;
+	std::vector<vk::ImageView> imageViews;
+
+	U32 width;
+	U32 height;
+};
+
+void destroySwapchain(const vk::Device device, Swapchain& swapchain)
+{
+	for (auto& framebuffer : swapchain.framebuffers)
+	{
+		device.destroy(framebuffer);
+	}
+	for (auto& imageView : swapchain.imageViews)
+	{
+		device.destroyImageView(imageView);
+	}
+	device.destroySwapchainKHR(swapchain.swapchain);
+}
+
+Swapchain createSwapchain(const vk::Device device, const vk::SurfaceKHR surface,
+                          const vk::SurfaceCapabilitiesKHR surfaceCapabilities, const U32 familyIndex, const U32 width,
+                          const U32 height, const vk::Format format, const vk::RenderPass renderPass,
+                          const vk::SwapchainKHR oldSwapchain)
+{
+	auto swapchain = createSwapchain(device, surface, surfaceCapabilities, familyIndex, static_cast<U32>(width),
+	                                 static_cast<U32>(height), format, oldSwapchain);
+	auto images = returnValueOnSuccess(device.getSwapchainImagesKHR(swapchain));
+	auto views = std::vector<vk::ImageView>{ images.size() };
+	auto framebuffers = std::vector<vk::Framebuffer>{ images.size() };
+	
+	for (U32 i = 0; i < views.size(); i++)
+	{
+		views[i] = createImageView(device, images[i], format);
+	}
+
+	for (U32 i = 0; i < framebuffers.size(); i++)
+	{
+		framebuffers[i] = createFramebuffer(device, renderPass, views[i], width, height);
+	}
+	
+	return Swapchain
+	{
+		.swapchain = swapchain,
+		.images = images,
+		.framebuffers = framebuffers,
+		.imageViews = views,
+		.width = width,
+		.height = height
+	};
+}
+
+void resizeSwapchain(const vk::Device device, const vk::SurfaceKHR surface,
+                     const vk::SurfaceCapabilitiesKHR surfaceCapabilities, const U32 familyIndex, const U32 width,
+                     const U32 height, const vk::Format format, const vk::RenderPass renderPass,
+                     Swapchain& swapchain)
+{
+	auto oldSwapchain = swapchain;
+
+	const auto newSwapchain = createSwapchain(device, surface, surfaceCapabilities, familyIndex, width, height, format, renderPass, swapchain.swapchain);
+	returnValueOnSuccess(device.waitIdle());
+	destroySwapchain(device, oldSwapchain);
+	swapchain = newSwapchain;
 }
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
@@ -458,7 +551,7 @@ int main()  // NOLINT(bugprone-exception-escape)
 		return 1;
 	}
 	auto window = SDL_CreateWindow("Vulkan Window", SDL_WINDOWPOS_CENTERED,
-		SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_VULKAN);
+		SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
 	if (window == nullptr)
 	{
 		std::cout << "Could not create SDL window." << std::endl;
@@ -552,7 +645,6 @@ int main()  // NOLINT(bugprone-exception-escape)
 	auto surfaceCapabilities = returnValueOnSuccess(physicalDevice.getSurfaceCapabilitiesKHR(surface));
 
 	
-	auto swapchain = crateSwapchain(device, surface, surfaceCapabilities, familyIndex, static_cast<U32>(width), static_cast<U32>(height), format);
 	auto acquireSemaphore = createSemaphore(device);
 	auto releaseSemaphore = createSemaphore(device);
 
@@ -570,26 +662,14 @@ int main()  // NOLINT(bugprone-exception-escape)
 
 	auto queue = device.getQueue(familyIndex, 0);
 
-	auto swapchainImage = returnValueOnSuccess(device.getSwapchainImagesKHR(swapchain));
-
-	auto swapchainImageViews = std::vector<vk::ImageView>{ swapchainImage.size() };
-	auto swapchainFramebuffer = std::vector<vk::Framebuffer>{ swapchainImage.size() };
 	auto renderPass = createRenderPass(device, format);
+	auto swapchain = createSwapchain(device, surface, surfaceCapabilities, familyIndex, static_cast<U32>(width),
+	                                 static_cast<U32>(height), format, renderPass, nullptr);
 
 	auto pipelineLayout = createPipelineLayout(device);
-	auto trianglePipeline = createGraphicsPipeline(device, pipelineCache, renderPass, pipelineLayout, triangleVertexShader, triangleFragmentShader);
-
-	for (U32 i = 0; i < swapchainImageViews.size(); i++)
-	{
-		swapchainImageViews[i] = createImageView(device, swapchainImage[i], format);
-	}
+	auto trianglePipeline = createGraphicsPipeline(device, pipelineCache, renderPass, pipelineLayout,
+	                                               triangleVertexShader, triangleFragmentShader);
 	
-	for (U32 i = 0; i < swapchainFramebuffer.size(); i++)
-	{
-		swapchainFramebuffer[i] = createFramebuffer(device, renderPass, swapchainImageViews[i], static_cast<U32>(width), static_cast<U32>(height));
-	}
-
-
 	auto commandPoolCreateInfo = vk::CommandPoolCreateInfo
 	{
 		.flags = vk::CommandPoolCreateFlagBits::eTransient,
@@ -612,86 +692,21 @@ int main()  // NOLINT(bugprone-exception-escape)
 		auto event = SDL_Event{};
 		while (SDL_PollEvent(&event))
 		{
-			U32 imageIndex = 0;
-			returnValueOnSuccess(device.acquireNextImageKHR(swapchain, ~0ull, acquireSemaphore, nullptr, &imageIndex));
-
-			returnValueOnSuccess(device.resetCommandPool(commandPool));
-
-			auto beginInfo = vk::CommandBufferBeginInfo
-			{
-				.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
-			};
-			returnValueOnSuccess(commandBuffer.begin(beginInfo));
-			
-			auto color = vk::ClearColorValue{ std::array{ 100.0f/255.0f, 149.0f/255.0f,237.0f/255.0f,1.0f } };
-			auto clearValue = vk::ClearValue{ color };
-			auto renderPassBeginInfo = vk::RenderPassBeginInfo
-			{
-				.renderPass = renderPass,
-				.framebuffer = swapchainFramebuffer[imageIndex],
-				.renderArea = vk::Rect2D{.extent = vk::Extent2D{.width = static_cast<U32>(width), .height = static_cast<U32>(height)}},
-				.clearValueCount = 1,
-				.pClearValues = &clearValue
-			};
-
-			commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
-
-			auto viewport = vk::Viewport
-			{
-				.x = 0,
-				.y = static_cast<float>(height),
-				.width = static_cast<float>(width),
-				.height = -static_cast<float>(height),
-				.minDepth = 0,
-				.maxDepth = 1
-			};
-			auto scissor = vk::Rect2D{ { 0, 0 }, { static_cast<U32>(width), static_cast<U32>(height) } };
-			commandBuffer.setViewport(0, 1, &viewport);
-			commandBuffer.setScissor(0, 1, &scissor);
-			commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, trianglePipeline);
-			commandBuffer.draw(3, 1, 0, 0);
-			
-			commandBuffer.endRenderPass();
-
-			
-
-			returnValueOnSuccess(commandBuffer.end());
-
-
-			auto stageMask = vk::PipelineStageFlags{ vk::PipelineStageFlagBits::eColorAttachmentOutput };
-
-			auto submits = std::array<vk::SubmitInfo, 1>
-			{
-				vk::SubmitInfo
-				{
-					.waitSemaphoreCount = 1,
-					.pWaitSemaphores = &acquireSemaphore,
-					.pWaitDstStageMask = &stageMask,
-					.commandBufferCount = 1,
-					.pCommandBuffers = &commandBuffer,
-					.signalSemaphoreCount = 1,
-					.pSignalSemaphores = &releaseSemaphore
-				}
-			};
-			returnValueOnSuccess(queue.submit(submits));
-			
-			auto presentInfo = vk::PresentInfoKHR
-			{
-				.waitSemaphoreCount = 1,
-				.pWaitSemaphores = &releaseSemaphore,
-				.swapchainCount = 1,
-				.pSwapchains = &swapchain,
-				.pImageIndices = &imageIndex
-			};
-			
-			returnValueOnSuccess(queue.presentKHR(presentInfo));
-			returnValueOnSuccess(device.waitIdle());
-
 			switch (event.type)
 			{
 
 			case SDL_QUIT:
 				stillRunning = false;
+				break;
+			case SDL_WINDOWEVENT:
+				if(event.window.event == SDL_WINDOWEVENT_RESIZED && event.window.windowID == SDL_GetWindowID(window))
+				{
+					resizeSwapchain(device, surface, surfaceCapabilities, familyIndex,
+					                static_cast<U32>(event.window.data1), static_cast<U32>(event.window.data2), format,
+					                renderPass, swapchain);
+					
+				}
+					
 				break;
 
 			default:
@@ -699,23 +714,121 @@ int main()  // NOLINT(bugprone-exception-escape)
 				break;
 			}
 		}
+
+
+		U32 imageIndex = 0;
+		returnValueOnSuccess(device.acquireNextImageKHR(swapchain.swapchain, ~0ull, acquireSemaphore, nullptr, &imageIndex));
+
+		returnValueOnSuccess(device.resetCommandPool(commandPool));
+
+		auto beginInfo = vk::CommandBufferBeginInfo
+		{
+			.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+		};
+		returnValueOnSuccess(commandBuffer.begin(beginInfo));
+
+		auto renderBeginBarrier = imageBarrier(swapchain.images[imageIndex], static_cast<vk::AccessFlagBits>(0),
+			vk::AccessFlagBits::eColorAttachmentWrite,
+			vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal);
+
+		commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			vk::DependencyFlagBits::eByRegion, nullptr, nullptr,
+			std::array{ renderBeginBarrier });
+
+
+
+		auto color = vk::ClearColorValue{ std::array{ 100.0f / 255.0f, 149.0f / 255.0f,237.0f / 255.0f,1.0f } };
+		auto clearValue = vk::ClearValue{ color };
+		auto renderPassBeginInfo = vk::RenderPassBeginInfo
+		{
+			.renderPass = renderPass,
+			.framebuffer = swapchain.framebuffers[imageIndex],
+			.renderArea = vk::Rect2D{.extent = vk::Extent2D{.width = swapchain.width, .height = swapchain.height}},
+			.clearValueCount = 1,
+			.pClearValues = &clearValue
+		};
+
+		commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
+
+		auto viewport = vk::Viewport
+		{
+			.x = 0,
+			.y = static_cast<float>(swapchain.height),
+			.width = static_cast<float>(swapchain.width),
+			.height = -static_cast<float>(swapchain.height),
+			.minDepth = 0,
+			.maxDepth = 1
+		};
+		auto scissor = vk::Rect2D{ { 0, 0 }, { swapchain.width, swapchain.height } };
+		commandBuffer.setViewport(0, 1, &viewport);
+		commandBuffer.setScissor(0, 1, &scissor);
+		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, trianglePipeline);
+		commandBuffer.draw(3, 1, 0, 0);
+
+		commandBuffer.endRenderPass();
+
+
+		auto renderEndBarrier = imageBarrier(swapchain.images[imageIndex],
+			vk::AccessFlagBits::eColorAttachmentWrite,
+			static_cast<vk::AccessFlagBits>(0), vk::ImageLayout::eUndefined,
+			vk::ImageLayout::ePresentSrcKHR);
+
+		commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			vk::PipelineStageFlagBits::eTopOfPipe, vk::DependencyFlagBits::eByRegion,
+			nullptr, nullptr, std::array{ renderEndBarrier });
+
+		returnValueOnSuccess(commandBuffer.end());
+
+
+		auto stageMask = vk::PipelineStageFlags{ vk::PipelineStageFlagBits::eColorAttachmentOutput };
+
+		auto submits = std::array<vk::SubmitInfo, 1>
+		{
+			vk::SubmitInfo
+			{
+				.waitSemaphoreCount = 1,
+				.pWaitSemaphores = &acquireSemaphore,
+				.pWaitDstStageMask = &stageMask,
+				.commandBufferCount = 1,
+				.pCommandBuffers = &commandBuffer,
+				.signalSemaphoreCount = 1,
+				.pSignalSemaphores = &releaseSemaphore
+			}
+		};
+		returnValueOnSuccess(queue.submit(submits));
+
+		auto presentInfo = vk::PresentInfoKHR
+		{
+			.waitSemaphoreCount = 1,
+			.pWaitSemaphores = &releaseSemaphore,
+			.swapchainCount = 1,
+			.pSwapchains = &swapchain.swapchain,
+			.pImageIndices = &imageIndex
+		};
+
+		returnValueOnSuccess(queue.presentKHR(presentInfo));
+		returnValueOnSuccess(device.waitIdle());
+		
 		SDL_WaitEvent(nullptr);
 		//SDL_Delay(10);
 	}
 
+
+	returnValueOnSuccess(device.waitIdle());
 	// Clean up.
-	device.destroySwapchainKHR(swapchain);
+	device.destroySwapchainKHR(swapchain.swapchain);
 	device.destroyPipeline(trianglePipeline);
 	device.destroySemaphore(acquireSemaphore);
 	device.destroySemaphore(releaseSemaphore);
 	device.destroyFence(fence);
 	device.destroyCommandPool(commandPool);
 	device.destroyPipelineLayout(pipelineLayout);
-	for(auto &framebuffer : swapchainFramebuffer)
+	for(auto &framebuffer : swapchain.framebuffers)
 	{
 		device.destroy(framebuffer);
 	}
-	for(auto &imageView : swapchainImageViews)
+	for(auto &imageView : swapchain.imageViews)
 	{
 		device.destroyImageView(imageView);
 	}
