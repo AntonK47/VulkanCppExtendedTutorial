@@ -38,6 +38,11 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_vulkan.h>
 #include <vulkan/vulkan.hpp>
+
+#define FAST_OBJ_IMPLEMENTATION
+#include <fast_obj.h>
+#include <meshoptimizer.h>
+
 #pragma warning(pop)
 
 
@@ -334,9 +339,44 @@ vk::Pipeline createGraphicsPipeline(vk::Device device, vk::PipelineCache pipelin
 		}
 	};
 
-	auto vertexInput = vk::PipelineVertexInputStateCreateInfo
+	const auto stream = vk::VertexInputBindingDescription
 	{
+		.binding = 0,
+		.stride = 32,
+		.inputRate = vk::VertexInputRate::eVertex
+	};
 
+	const auto attrs = std::array
+	{
+		vk::VertexInputAttributeDescription
+		{
+			.location = 0,
+			.binding = 0,
+			.format = vk::Format::eR32G32B32Sfloat,
+			.offset = 0
+		},
+		vk::VertexInputAttributeDescription
+		{
+			.location = 1,
+			.binding = 0,
+			.format = vk::Format::eR32G32B32Sfloat,
+			.offset = 12
+		},
+		vk::VertexInputAttributeDescription
+		{
+			.location = 2,
+			.binding = 0,
+			.format = vk::Format::eR32G32Sfloat,
+			.offset = 24
+		},
+
+	};
+	const auto vertexInput = vk::PipelineVertexInputStateCreateInfo
+	{
+		.vertexBindingDescriptionCount = 1,
+		.pVertexBindingDescriptions = &stream,
+		.vertexAttributeDescriptionCount = attrs.size(),
+		.pVertexAttributeDescriptions = attrs.data()
 	};
 
 	auto inputAssembly = vk::PipelineInputAssemblyStateCreateInfo
@@ -475,13 +515,13 @@ struct Swapchain
 	U32 height;
 };
 
-void destroySwapchain(const vk::Device device, Swapchain& swapchain)
+void destroySwapchain(const vk::Device device, const Swapchain& swapchain)
 {
-	for (auto& framebuffer : swapchain.framebuffers)
+	for (const auto& framebuffer : swapchain.framebuffers)
 	{
 		device.destroy(framebuffer);
 	}
-	for (auto& imageView : swapchain.imageViews)
+	for (const auto& imageView : swapchain.imageViews)
 	{
 		device.destroyImageView(imageView);
 	}
@@ -493,8 +533,8 @@ Swapchain createSwapchain(const vk::Device device, const vk::SurfaceKHR surface,
                           const U32 height, const vk::Format format, const vk::RenderPass renderPass,
                           const vk::SwapchainKHR oldSwapchain)
 {
-	auto swapchain = createSwapchain(device, surface, surfaceCapabilities, familyIndex, static_cast<U32>(width),
-	                                 static_cast<U32>(height), format, oldSwapchain);
+	auto swapchain = createSwapchain(device, surface, surfaceCapabilities, familyIndex, width,
+	                                 height, format, oldSwapchain);
 	auto images = returnValueOnSuccess(device.getSwapchainImagesKHR(swapchain));
 	auto views = std::vector<vk::ImageView>{ images.size() };
 	auto framebuffers = std::vector<vk::Framebuffer>{ images.size() };
@@ -525,7 +565,7 @@ void resizeSwapchain(const vk::Device device, const vk::SurfaceKHR surface,
                      const U32 height, const vk::Format format, const vk::RenderPass renderPass,
                      Swapchain& swapchain)
 {
-	auto oldSwapchain = swapchain;
+	const auto oldSwapchain = swapchain;
 
 	const auto newSwapchain = createSwapchain(device, surface, surfaceCapabilities, familyIndex, width, height, format, renderPass, swapchain.swapchain);
 	returnValueOnSuccess(device.waitIdle());
@@ -533,11 +573,162 @@ void resizeSwapchain(const vk::Device device, const vk::SurfaceKHR surface,
 	swapchain = newSwapchain;
 }
 
+
+struct Vertex
+{
+	float vx, vy, vz;
+	float nx, ny, nz;
+	float tu, tv;
+};
+
+struct Mesh
+{
+	std::vector<Vertex> vertices;
+	std::vector<U32> indices;
+};
+
+Mesh loadMesh(const char* path)
+{
+	const auto meshData = fast_obj_read(path);
+
+
+	U32 totalIndices = 0;
+
+	for (U32 i = 0; i < meshData->face_count; ++i)
+	{
+		totalIndices += (meshData->face_vertices[i] - 2) * 3;
+	}
+	auto vertices = std::vector<Vertex>{ totalIndices };
+
+	U32 vertexOffset = 0;
+	U32 indexOffset = 0;
+
+	for (U32 i = 0; i < meshData->face_count; ++i)
+	{
+		for (U32 j = 0; j < meshData->face_vertices[i]; ++j)
+		{
+			const auto [p, t, n] = meshData->indices[indexOffset + j];
+
+			const Vertex v =
+			{
+				meshData->positions[p * 3 + 0],
+				meshData->positions[p * 3 + 1],
+				meshData->positions[p * 3 + 2],
+				meshData->normals[n * 3 + 0],
+				meshData->normals[n * 3 + 1],
+				meshData->normals[n * 3 + 2],
+				meshData->texcoords[t * 2 + 0],
+				meshData->texcoords[t * 2 + 1],
+			};
+
+			// triangulate polygon on the fly; offset-3 is always the first polygon vertex
+			if (j >= 3)
+			{
+				vertices[vertexOffset + 0] = vertices[vertexOffset - 3];
+				vertices[vertexOffset + 1] = vertices[vertexOffset - 1];
+				vertexOffset += 2;
+			}
+
+			vertices[vertexOffset] = v;
+			vertexOffset++;
+		}
+
+		indexOffset += meshData->face_vertices[i];
+	}
+
+	fast_obj_destroy(meshData);
+
+	std::vector<U32> remap(totalIndices);
+
+	const auto totalVertices = meshopt_generateVertexRemap(&remap[0], nullptr, totalIndices, &vertices[0],
+	                                                          totalIndices, sizeof(Vertex));
+
+	auto result = Mesh{};
+	
+	result.indices.resize(totalIndices);
+	meshopt_remapIndexBuffer(&result.indices[0], nullptr, totalIndices, &remap[0]);
+
+	result.vertices.resize(totalVertices);
+	meshopt_remapVertexBuffer(&result.vertices[0], &vertices[0], totalIndices, sizeof(Vertex), &remap[0]);
+	
+	return result;
+}
+
+struct Buffer
+{
+	vk::Buffer buffer;
+	vk::DeviceMemory memory;
+	void* data{};// std::unique_ptr<void*> data;
+	U32 size{};
+};
+
+U32 selectMemoryType(const vk::PhysicalDeviceMemoryProperties& memoryProperties, U32 memoryTypeBits, const vk::MemoryPropertyFlags flags)
+{
+	U32 result = -1;
+	for(U32 i = 0; memoryProperties.memoryTypeCount; i++)
+	{
+		if((memoryTypeBits & 1 << i) != 0 && (memoryProperties.memoryTypes[i].propertyFlags & flags) == flags)
+		{
+			result = i;
+			break;
+		}
+	}
+
+	BOOST_ASSERT_MSG(result >= static_cast<U32>(0), "No compatible memory type found!");
+	return result;
+}
+
+Buffer createBuffer(const vk::Device device, const vk::PhysicalDeviceMemoryProperties& memoryProperties, const U32 size, const vk::BufferUsageFlagBits usage)
+{
+
+	const auto createInfo = vk::BufferCreateInfo
+	{
+		.size = size,
+		.usage = usage
+	};
+
+	const auto buffer = returnValueOnSuccess(device.createBuffer(createInfo));
+
+	const auto memoryRequirements = device.getBufferMemoryRequirements(buffer);
+
+	auto memoryHeapIndex = selectMemoryType(memoryProperties, memoryRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+	
+	const auto allocateInfo = vk::MemoryAllocateInfo
+	{
+		.allocationSize = memoryRequirements.size,
+		.memoryTypeIndex = memoryHeapIndex
+	};
+	auto memory = returnValueOnSuccess(device.allocateMemory(allocateInfo));
+
+	returnValueOnSuccess(device.bindBufferMemory(buffer, memory, 0));
+
+	auto dataPtr = returnValueOnSuccess(device.mapMemory(memory, 0, memoryRequirements.size));
+
+
+
+	return Buffer
+	{
+		.buffer = buffer,
+		.memory = memory,
+		.data = dataPtr,// std::make_unique<void*>(dataPtr),
+		.size = static_cast<U32>(memoryRequirements.size)
+	};
+}
+
+void destroyBuffer(const Buffer& buffer, const vk::Device device)
+{
+	device.freeMemory(buffer.memory);
+	device.destroyBuffer(buffer.buffer);
+}
+
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 int main()  // NOLINT(bugprone-exception-escape)
 {
 
+
+
+	
 	vk::DynamicLoader dl;
 	auto vkGetInstanceProcAddr = dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
 	VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
@@ -684,6 +875,28 @@ int main()  // NOLINT(bugprone-exception-escape)
 	};
 	auto commandBuffer = vk::CommandBuffer{ returnValueOnSuccess(device.allocateCommandBuffers(allocateInfo)).front() };
 
+
+
+
+	const auto memoryProperties = physicalDevice.getMemoryProperties();
+
+	auto mesh = loadMesh("data/kitten.obj");
+
+	auto vb = createBuffer(device, memoryProperties, 128 * 1024 * 1024, vk::BufferUsageFlagBits::eVertexBuffer);
+	auto ib = createBuffer(device, memoryProperties, 128 * 1024 * 1024, vk::BufferUsageFlagBits::eIndexBuffer);
+
+	assert(vb.size >= mesh.vertices.size() * sizeof(Vertex));
+	std::memcpy(vb.data, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex));
+
+	assert(ib.size >= mesh.indices.size() * sizeof(U32));
+	std::memcpy(ib.data, mesh.indices.data(), mesh.indices.size() * sizeof(U32));
+	
+
+
+
+
+
+	
 	// Poll for user input.
 	auto stillRunning = true;
 	while (stillRunning)
@@ -764,8 +977,12 @@ int main()  // NOLINT(bugprone-exception-escape)
 		commandBuffer.setViewport(0, 1, &viewport);
 		commandBuffer.setScissor(0, 1, &scissor);
 		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, trianglePipeline);
-		commandBuffer.draw(3, 1, 0, 0);
 
+		auto dummyOffset = vk::DeviceSize{ 0 };
+		commandBuffer.bindVertexBuffers(0, 1, &vb.buffer, &dummyOffset);
+		commandBuffer.bindIndexBuffer(ib.buffer, dummyOffset, vk::IndexType::eUint32);
+		//commandBuffer.draw(3, 1, 0, 0);
+		commandBuffer.drawIndexed( static_cast<U32>(mesh.indices.size()), 1, 0, 0, 0);
 		commandBuffer.endRenderPass();
 
 
@@ -817,6 +1034,9 @@ int main()  // NOLINT(bugprone-exception-escape)
 
 	returnValueOnSuccess(device.waitIdle());
 	// Clean up.
+
+	destroyBuffer(vb, device);
+	destroyBuffer(ib, device);
 	device.destroySwapchainKHR(swapchain.swapchain);
 	device.destroyPipeline(trianglePipeline);
 	device.destroySemaphore(acquireSemaphore);

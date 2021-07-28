@@ -5,12 +5,66 @@
     <Filter Include="shaders">
       <UniqueIdentifier>{ac8f1c7f-8c46-4d5d-89da-50bb743338c9}</UniqueIdentifier>
     </Filter>
+    <Filter Include="meshoptimizer">
+      <UniqueIdentifier>{28f35de2-9564-41d2-94c0-e6d965038981}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="meshoptimizer\src\allocator.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="meshoptimizer\src\clusterizer.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="meshoptimizer\src\indexcodec.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="meshoptimizer\src\indexgenerator.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="meshoptimizer\src\overdrawanalyzer.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="meshoptimizer\src\overdrawoptimizer.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="meshoptimizer\src\simplifier.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="meshoptimizer\src\spatialorder.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="meshoptimizer\src\stripifier.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="meshoptimizer\src\vcacheanalyzer.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="meshoptimizer\src\vcacheoptimizer.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="meshoptimizer\src\vertexcodec.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="meshoptimizer\src\vertexfilter.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="meshoptimizer\src\vfetchanalyzer.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="meshoptimizer\src\vfetchoptimizer.cpp">
+      <Filter>meshoptimizer</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="main.h" />
+    <ClInclude Include="meshoptimizer\src\meshoptimizer.h">
+      <Filter>meshoptimizer</Filter>
+    </ClInclude>
+    <ClInclude Include="meshoptimizer\extern\fast_obj.h">
+      <Filter>meshoptimizer</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="triangle.frag">
