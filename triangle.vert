@@ -1,30 +1,26 @@
 #version 450
-//#extension GL_KHR_vulkan_glsl: enable
 
-//const vec3 verticies[] =
-//{
-//	vec3(0.0,0.5,0.0),
-//	vec3(0.5,-0.5,0.0),
-//	vec3(-0.5,-0.5,0.0)
-//};
-//
-//
-//void main()
-//{
-//	gl_Position = vec4(verticies[gl_VertexIndex], 1.0);
-//}
-layout(location = 0)
-in vec3 position;
-layout(location = 1)
-in vec3 normal;
-layout(location = 2)
-in vec3 texCoord;
+struct Vertex
+{
+	float vx, vy, vz;
+	float nx, ny, nz;
+	float tu, tv;
+};
 
-layout(location = 0)
-out vec4 color;
+layout(binding=0) readonly buffer Verticies
+{
+	Vertex verticies[];
+};
 
+layout(location = 0) out vec4 color;
 void main()
 {
+	Vertex v = verticies[gl_VertexIndex];
+
+	vec3 position = vec3(v.vx, v.vy, v.vz);
+	vec3 normal = vec3(v.nx, v.ny, v.nz);
+	vec2 texcoord = vec2(v.tu, v.tv);
+
 	gl_Position = vec4(position + vec3(0,0,0.5), 1.0);
 	color = vec4(normal * 0.5 + vec3(0.5), 1.0);
 }

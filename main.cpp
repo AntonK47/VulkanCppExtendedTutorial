@@ -138,7 +138,7 @@ vk::Device createDevice(const vk::PhysicalDevice physicalDevice, U32 familyIndex
 	};
 
 
-	auto extensions = std::array<const char*, 1>{ VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+	auto extensions = std::array{ VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME };
 	const auto deviceCreateInfo = vk::DeviceCreateInfo
 	{
 		.queueCreateInfoCount = 1,
@@ -311,12 +311,35 @@ vk::ShaderModule loadShader(const vk::Device device, const char* path)
 
 vk::PipelineLayout createPipelineLayout(const vk::Device device)
 {
-	const auto createInfo = vk::PipelineLayoutCreateInfo
-	{
-
+	const auto setBindings = std::array{ vk::DescriptorSetLayoutBinding
+		{
+			.binding = 0,
+			.descriptorType = vk::DescriptorType::eStorageBuffer,
+			.descriptorCount = 1,
+			.stageFlags = vk::ShaderStageFlagBits::eVertex
+		}
 	};
 
-	return returnValueOnSuccess(device.createPipelineLayout(createInfo));
+	const auto setLayoutCreateInfo = vk::DescriptorSetLayoutCreateInfo
+	{
+		.flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+		.bindingCount = setBindings.size(),
+		.pBindings = setBindings.data()
+	};
+
+	const auto descriptorSetLayout =
+		returnValueOnSuccess(device.createDescriptorSetLayout(setLayoutCreateInfo));
+
+	const auto createInfo = vk::PipelineLayoutCreateInfo
+	{
+		.setLayoutCount = 1,
+		.pSetLayouts = &descriptorSetLayout
+	};
+	const auto layout = returnValueOnSuccess(device.createPipelineLayout(createInfo));
+
+	//device.destroyDescriptorSetLayout(descriptorSetLayout);
+
+	return layout;
 }
 
 vk::Pipeline createGraphicsPipeline(vk::Device device, vk::PipelineCache pipelineCache, vk::RenderPass renderPass,
@@ -339,7 +362,7 @@ vk::Pipeline createGraphicsPipeline(vk::Device device, vk::PipelineCache pipelin
 		}
 	};
 
-	const auto stream = vk::VertexInputBindingDescription
+	/*const auto stream = vk::VertexInputBindingDescription
 	{
 		.binding = 0,
 		.stride = 32,
@@ -377,6 +400,9 @@ vk::Pipeline createGraphicsPipeline(vk::Device device, vk::PipelineCache pipelin
 		.pVertexBindingDescriptions = &stream,
 		.vertexAttributeDescriptionCount = attrs.size(),
 		.pVertexAttributeDescriptions = attrs.data()
+	};*/
+	const auto vertexInput = vk::PipelineVertexInputStateCreateInfo
+	{
 	};
 
 	auto inputAssembly = vk::PipelineInputAssemblyStateCreateInfo
@@ -433,7 +459,7 @@ vk::Pipeline createGraphicsPipeline(vk::Device device, vk::PipelineCache pipelin
 	{
 		.stageCount = static_cast<U32>(stages.size()),
 		.pStages = stages.data(),
-		.pVertexInputState = &vertexInput,
+		.pVertexInputState = &vertexInput, //fixed function vertex input
 		.pInputAssemblyState = &inputAssembly,
 		.pViewportState = &viewport,
 		.pRasterizationState = &rasterization,
@@ -857,8 +883,8 @@ int main()  // NOLINT(bugprone-exception-escape)
 	auto swapchain = createSwapchain(device, surface, surfaceCapabilities, familyIndex, static_cast<U32>(width),
 	                                 static_cast<U32>(height), format, renderPass, nullptr);
 
-	auto pipelineLayout = createPipelineLayout(device);
-	auto trianglePipeline = createGraphicsPipeline(device, pipelineCache, renderPass, pipelineLayout,
+	auto triangleLayout = createPipelineLayout(device);
+	auto trianglePipeline = createGraphicsPipeline(device, pipelineCache, renderPass, triangleLayout,
 	                                               triangleVertexShader, triangleFragmentShader);
 	
 	auto commandPoolCreateInfo = vk::CommandPoolCreateInfo
@@ -882,7 +908,7 @@ int main()  // NOLINT(bugprone-exception-escape)
 
 	auto mesh = loadMesh("data/kitten.obj");
 
-	auto vb = createBuffer(device, memoryProperties, 128 * 1024 * 1024, vk::BufferUsageFlagBits::eVertexBuffer);
+	auto vb = createBuffer(device, memoryProperties, 128 * 1024 * 1024, vk::BufferUsageFlagBits::eStorageBuffer);
 	auto ib = createBuffer(device, memoryProperties, 128 * 1024 * 1024, vk::BufferUsageFlagBits::eIndexBuffer);
 
 	assert(vb.size >= mesh.vertices.size() * sizeof(Vertex));
@@ -978,8 +1004,26 @@ int main()  // NOLINT(bugprone-exception-escape)
 		commandBuffer.setScissor(0, 1, &scissor);
 		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, trianglePipeline);
 
+
+		const auto bufferInfo = vk::DescriptorBufferInfo
+		{
+			.buffer = vb.buffer,
+			.offset = 0,
+			.range = vk::DeviceSize{ vb.size }
+		};
+
+		const auto descriptors = std::array{
+			vk::WriteDescriptorSet
+			{
+				.dstBinding = 0,
+				.descriptorCount = 1,
+				.descriptorType = vk::DescriptorType::eStorageBuffer,
+				.pBufferInfo = &bufferInfo
+			}
+		};
+		commandBuffer.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, triangleLayout, 0, descriptors);
+
 		auto dummyOffset = vk::DeviceSize{ 0 };
-		commandBuffer.bindVertexBuffers(0, 1, &vb.buffer, &dummyOffset);
 		commandBuffer.bindIndexBuffer(ib.buffer, dummyOffset, vk::IndexType::eUint32);
 		//commandBuffer.draw(3, 1, 0, 0);
 		commandBuffer.drawIndexed( static_cast<U32>(mesh.indices.size()), 1, 0, 0, 0);
@@ -1043,7 +1087,7 @@ int main()  // NOLINT(bugprone-exception-escape)
 	device.destroySemaphore(releaseSemaphore);
 	device.destroyFence(fence);
 	device.destroyCommandPool(commandPool);
-	device.destroyPipelineLayout(pipelineLayout);
+	device.destroyPipelineLayout(triangleLayout);
 	for(auto &framebuffer : swapchain.framebuffers)
 	{
 		device.destroy(framebuffer);
