@@ -138,13 +138,48 @@ vk::Device createDevice(const vk::PhysicalDevice physicalDevice, U32 familyIndex
 	};
 
 
-	auto extensions = std::array{ VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME };
+	auto extensions = std::array
+	{
+		VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+		VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
+		VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
+		VK_KHR_8BIT_STORAGE_EXTENSION_NAME
+	};
+	
+
+	const auto features = vk::StructureChain<vk::PhysicalDeviceFeatures2,
+		vk::PhysicalDevice16BitStorageFeatures,
+		vk::PhysicalDevice8BitStorageFeatures,
+		vk::PhysicalDeviceShaderFloat16Int8Features>
+	{
+		vk::PhysicalDeviceFeatures2
+		{
+			.features = vk::PhysicalDeviceFeatures{}
+		},
+		vk::PhysicalDevice16BitStorageFeatures
+		{
+			.storageBuffer16BitAccess = vk::Bool32{true},
+			.uniformAndStorageBuffer16BitAccess = vk::Bool32{true}
+		},
+		vk::PhysicalDevice8BitStorageFeatures
+		{
+			.storageBuffer8BitAccess = vk::Bool32{true},
+			.uniformAndStorageBuffer8BitAccess = vk::Bool32{true}
+		},
+		vk::PhysicalDeviceShaderFloat16Int8Features
+		{
+			.shaderInt8 = vk::Bool32{true}
+		}
+	};
+
 	const auto deviceCreateInfo = vk::DeviceCreateInfo
 	{
+		.pNext = &features.get(),
 		.queueCreateInfoCount = 1,
 		.pQueueCreateInfos = &deviceQueueCreateInfo,
 		.enabledExtensionCount = static_cast<U32>(extensions.size()),
-		.ppEnabledExtensionNames = extensions.data()
+		.ppEnabledExtensionNames = extensions.data(),
+		
 	};
 	return returnValueOnSuccess(physicalDevice.createDevice(deviceCreateInfo));
 }
@@ -418,6 +453,7 @@ vk::Pipeline createGraphicsPipeline(vk::Device device, vk::PipelineCache pipelin
 
 	auto rasterization = vk::PipelineRasterizationStateCreateInfo
 	{
+		.cullMode = vk::CullModeFlagBits::eBack,
 		.lineWidth = 1.0f
 	};
 	auto multisample = vk::PipelineMultisampleStateCreateInfo
@@ -603,7 +639,7 @@ void resizeSwapchain(const vk::Device device, const vk::SurfaceKHR surface,
 struct Vertex
 {
 	float vx, vy, vz;
-	float nx, ny, nz;
+	uint8_t nx, ny, nz;
 	float tu, tv;
 };
 
@@ -634,15 +670,17 @@ Mesh loadMesh(const char* path)
 		for (U32 j = 0; j < meshData->face_vertices[i]; ++j)
 		{
 			const auto [p, t, n] = meshData->indices[indexOffset + j];
-
+			const auto nx = meshData->normals[n * 3 + 0];
+			const auto ny = meshData->normals[n * 3 + 1];
+			const auto nz = meshData->normals[n * 3 + 2];
 			const Vertex v =
 			{
 				meshData->positions[p * 3 + 0],
 				meshData->positions[p * 3 + 1],
 				meshData->positions[p * 3 + 2],
-				meshData->normals[n * 3 + 0],
-				meshData->normals[n * 3 + 1],
-				meshData->normals[n * 3 + 2],
+				static_cast<uint8_t>(nx * 127.0f + 127.0f),
+				static_cast<uint8_t>(ny * 127.0f + 127.0f),
+				static_cast<uint8_t>(nz * 127.0f + 127.0f),
 				meshData->texcoords[t * 2 + 0],
 				meshData->texcoords[t * 2 + 1],
 			};
@@ -768,7 +806,7 @@ int main()  // NOLINT(bugprone-exception-escape)
 		return 1;
 	}
 	auto window = SDL_CreateWindow("Vulkan Window", SDL_WINDOWPOS_CENTERED,
-		SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+		SDL_WINDOWPOS_CENTERED, 800, 600, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
 	if (window == nullptr)
 	{
 		std::cout << "Could not create SDL window." << std::endl;
