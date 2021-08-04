@@ -73,5 +73,8 @@
     <CustomBuild Include="triangle.vert">
       <Filter>shaders</Filter>
     </CustomBuild>
+    <CustomBuild Include="meshlet.mesh">
+      <Filter>shaders</Filter>
+    </CustomBuild>
   </ItemGroup>
 </Project>

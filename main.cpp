@@ -47,7 +47,11 @@
 
 
 #include <iostream>
+#include <iomanip>
 #include <vector>
+
+
+#define RTX 1  // NOLINT(cppcoreguidelines-macro-usage)
 
 using U32 = uint32_t;
 
@@ -55,7 +59,7 @@ template<typename T>
 T returnValueOnSuccess(const vk::ResultValue<T>& call) { assert(call.result == vk::Result::eSuccess); return call.value; }
 
 
-vk::Result returnValueOnSuccess(const vk::Result& result) { assert(result == vk::Result::eSuccess); return result; }
+void returnValueOnSuccess(const vk::Result& result) { assert(result == vk::Result::eSuccess); }
 
 
 void setupConsole(const std::wstring& title)
@@ -143,14 +147,22 @@ vk::Device createDevice(const vk::PhysicalDevice physicalDevice, U32 familyIndex
 		VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 		VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
 		VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
-		VK_KHR_8BIT_STORAGE_EXTENSION_NAME
+		VK_KHR_8BIT_STORAGE_EXTENSION_NAME,
+#if RTX
+		VK_NV_MESH_SHADER_EXTENSION_NAME
+#endif
 	};
 	
 
 	const auto features = vk::StructureChain<vk::PhysicalDeviceFeatures2,
 		vk::PhysicalDevice16BitStorageFeatures,
 		vk::PhysicalDevice8BitStorageFeatures,
-		vk::PhysicalDeviceShaderFloat16Int8Features>
+		vk::PhysicalDeviceShaderFloat16Int8Features
+#if RTX
+		,vk::PhysicalDeviceMeshShaderFeaturesNV
+#endif
+
+	>
 	{
 		vk::PhysicalDeviceFeatures2
 		{
@@ -169,7 +181,15 @@ vk::Device createDevice(const vk::PhysicalDevice physicalDevice, U32 familyIndex
 		vk::PhysicalDeviceShaderFloat16Int8Features
 		{
 			.shaderInt8 = vk::Bool32{true}
+		},
+#if RTX
+		vk::PhysicalDeviceMeshShaderFeaturesNV
+		{
+			.taskShader = vk::Bool32{true},
+			.meshShader = vk::Bool32{true}
 		}
+#endif
+
 	};
 
 	const auto deviceCreateInfo = vk::DeviceCreateInfo
@@ -346,6 +366,25 @@ vk::ShaderModule loadShader(const vk::Device device, const char* path)
 
 vk::PipelineLayout createPipelineLayout(const vk::Device device)
 {
+#if RTX
+	const auto setBindings = std::array
+	{
+		vk::DescriptorSetLayoutBinding
+		{
+			.binding = 0,
+			.descriptorType = vk::DescriptorType::eStorageBuffer,
+			.descriptorCount = 1,
+			.stageFlags = vk::ShaderStageFlagBits::eMeshNV
+		},
+		vk::DescriptorSetLayoutBinding
+		{
+			.binding = 1,
+			.descriptorType = vk::DescriptorType::eStorageBuffer,
+			.descriptorCount = 1,
+			.stageFlags = vk::ShaderStageFlagBits::eMeshNV
+		}
+	};
+#else
 	const auto setBindings = std::array{ vk::DescriptorSetLayoutBinding
 		{
 			.binding = 0,
@@ -354,6 +393,9 @@ vk::PipelineLayout createPipelineLayout(const vk::Device device)
 			.stageFlags = vk::ShaderStageFlagBits::eVertex
 		}
 	};
+#endif
+
+	
 
 	const auto setLayoutCreateInfo = vk::DescriptorSetLayoutCreateInfo
 	{
@@ -381,14 +423,24 @@ vk::Pipeline createGraphicsPipeline(vk::Device device, vk::PipelineCache pipelin
                                     vk::PipelineLayout pipelineLayout, vk::ShaderModule triangleVertexShader,
                                     vk::ShaderModule triangleFragmentShader)
 {
-	auto stages = std::array<vk::PipelineShaderStageCreateInfo, 2>
+	auto stages = std::array
 	{
+#if RTX
+		vk::PipelineShaderStageCreateInfo
+		{
+			.stage = vk::ShaderStageFlagBits::eMeshNV,
+			.module = triangleVertexShader,
+			.pName = "main"
+		},
+#else
 		vk::PipelineShaderStageCreateInfo
 		{
 			.stage = vk::ShaderStageFlagBits::eVertex,
 			.module = triangleVertexShader,
 			.pName = "main"
 		},
+#endif
+
 		vk::PipelineShaderStageCreateInfo
 		{
 			.stage = vk::ShaderStageFlagBits::eFragment,
@@ -643,10 +695,19 @@ struct Vertex
 	float tu, tv;
 };
 
+struct Meshlet
+{
+	uint32_t vertices[64];
+	uint8_t indices[126];
+	uint8_t indexCount;
+	uint8_t vertexCount;
+};
+
 struct Mesh
 {
 	std::vector<Vertex> vertices;
 	std::vector<U32> indices;
+	std::vector<Meshlet> meshlets;
 };
 
 Mesh loadMesh(const char* path)
@@ -787,6 +848,71 @@ void destroyBuffer(const Buffer& buffer, const vk::Device device)
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
+
+void buildMeshlets(Mesh& mesh)
+{
+	auto meshlet = Meshlet{};
+
+	constexpr auto invalidVertexValue = std::numeric_limits<uint8_t>::max();
+	auto meshletVertices = std::vector<uint8_t>( mesh.vertices.size(), invalidVertexValue);
+
+	for (U32 i = 0; i < static_cast<U32>(mesh.indices.size()); i+=3)
+	{
+		const auto a = mesh.indices[i + 0];
+		const auto b = mesh.indices[i + 1];
+		const auto c = mesh.indices[i + 2];
+
+		auto& av = meshletVertices[a];
+		auto& bv = meshletVertices[b];
+		auto& cv = meshletVertices[c];
+
+		const auto newVertexCount = meshlet.vertexCount + (av == invalidVertexValue) + (bv == invalidVertexValue) + (cv == invalidVertexValue);
+
+		if(newVertexCount > 64 || meshlet.indexCount + 3 > 126)
+		{
+			mesh.meshlets.push_back(meshlet);
+			meshlet = {};
+			memset(meshletVertices.data(), invalidVertexValue, mesh.vertices.size());
+		}
+
+		if(av == invalidVertexValue)
+		{
+			av = meshlet.vertexCount;
+			meshlet.vertices[meshlet.vertexCount++] = a;
+		}
+		if(bv == invalidVertexValue)
+		{
+			bv = meshlet.vertexCount;
+			meshlet.vertices[meshlet.vertexCount++] = b;
+		}
+		if(cv == invalidVertexValue)
+		{
+			cv = meshlet.vertexCount;
+			meshlet.vertices[meshlet.vertexCount++] = c;
+		}
+
+		meshlet.indices[meshlet.indexCount++] = av;
+		meshlet.indices[meshlet.indexCount++] = bv;
+		meshlet.indices[meshlet.indexCount++] = cv;
+	}
+
+	if(meshlet.indexCount)
+	{
+		mesh.meshlets.push_back(meshlet);
+	}
+}
+
+
+vk::QueryPool createQueryPool(const vk::Device& device, U32 poolCount)
+{
+	const auto createInfo = vk::QueryPoolCreateInfo
+	{
+		.queryType = vk::QueryType::eTimestamp,
+		.queryCount = poolCount
+	};
+	return returnValueOnSuccess(device.createQueryPool(createInfo));
+}
+
 int main()  // NOLINT(bugprone-exception-escape)
 {
 
@@ -897,18 +1023,27 @@ int main()  // NOLINT(bugprone-exception-escape)
 	SDL_GetWindowSize(window, &width, &height);
 
 
+
+	auto props = physicalDevice.getProperties();
+	assert(props.limits.timestampComputeAndGraphics);
+
+
 	auto surfaceCapabilities = returnValueOnSuccess(physicalDevice.getSurfaceCapabilitiesKHR(surface));
 
 	
 	auto acquireSemaphore = createSemaphore(device);
 	auto releaseSemaphore = createSemaphore(device);
-
 	auto fence = returnValueOnSuccess(device.createFence({}));
 
+#if RTX
+	auto triangleVertexShader = loadShader(device, "shaders/meshlet.mesh.spv");
 
-
-
+#else
 	auto triangleVertexShader = loadShader(device, "shaders/triangle.vert.spv");
+
+#endif
+
+
 	auto triangleFragmentShader = loadShader(device, "shaders/triangle.frag.spv");
 
 	auto pipelineCache = nullptr;
@@ -920,6 +1055,11 @@ int main()  // NOLINT(bugprone-exception-escape)
 	auto renderPass = createRenderPass(device, format);
 	auto swapchain = createSwapchain(device, surface, surfaceCapabilities, familyIndex, static_cast<U32>(width),
 	                                 static_cast<U32>(height), format, renderPass, nullptr);
+
+
+	auto queryPool = createQueryPool(device, 128);
+
+
 
 	auto triangleLayout = createPipelineLayout(device);
 	auto trianglePipeline = createGraphicsPipeline(device, pipelineCache, renderPass, triangleLayout,
@@ -939,32 +1079,45 @@ int main()  // NOLINT(bugprone-exception-escape)
 	};
 	auto commandBuffer = vk::CommandBuffer{ returnValueOnSuccess(device.allocateCommandBuffers(allocateInfo)).front() };
 
+	
+	auto mesh = loadMesh("data/kitten.obj");
 
+#if  RTX
+	buildMeshlets(mesh);
+#endif
 
 
 	const auto memoryProperties = physicalDevice.getMemoryProperties();
 
-	auto mesh = loadMesh("data/kitten.obj");
+
 
 	auto vb = createBuffer(device, memoryProperties, 128 * 1024 * 1024, vk::BufferUsageFlagBits::eStorageBuffer);
 	auto ib = createBuffer(device, memoryProperties, 128 * 1024 * 1024, vk::BufferUsageFlagBits::eIndexBuffer);
+#if  RTX
+	auto mb = createBuffer(device, memoryProperties, 128 * 1024 * 1024, vk::BufferUsageFlagBits::eStorageBuffer);
+#endif
 
 	assert(vb.size >= mesh.vertices.size() * sizeof(Vertex));
 	std::memcpy(vb.data, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex));
 
 	assert(ib.size >= mesh.indices.size() * sizeof(U32));
 	std::memcpy(ib.data, mesh.indices.data(), mesh.indices.size() * sizeof(U32));
-	
+#if  RTX
+	assert(mb.size >= mesh.meshlets.size() * sizeof(Meshlet));
+	std::memcpy(mb.data, mesh.meshlets.data(), mesh.meshlets.size() * sizeof(Meshlet));
+#endif
 
 
 
-
+	auto frameCpuAvg = 0.0;
+	auto frameGpuAvg = 0.0;
 
 	
 	// Poll for user input.
 	auto stillRunning = true;
 	while (stillRunning)
 	{
+		auto frameCpuBegin = SDL_GetPerformanceCounter();
 
 		auto event = SDL_Event{};
 		while (SDL_PollEvent(&event))
@@ -1003,6 +1156,9 @@ int main()  // NOLINT(bugprone-exception-escape)
 			.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
 		};
 		returnValueOnSuccess(commandBuffer.begin(beginInfo));
+
+		commandBuffer.resetQueryPool(queryPool, 0,128);
+		commandBuffer.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe, queryPool, 0);
 
 		auto renderBeginBarrier = imageBarrier(swapchain.images[imageIndex], static_cast<vk::AccessFlagBits>(0),
 			vk::AccessFlagBits::eColorAttachmentWrite,
@@ -1043,12 +1199,20 @@ int main()  // NOLINT(bugprone-exception-escape)
 		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, trianglePipeline);
 
 
-		const auto bufferInfo = vk::DescriptorBufferInfo
+		const auto vbInfo = vk::DescriptorBufferInfo
 		{
 			.buffer = vb.buffer,
 			.offset = 0,
 			.range = vk::DeviceSize{ vb.size }
 		};
+#if RTX
+		const auto mbInfo = vk::DescriptorBufferInfo
+		{
+			.buffer = mb.buffer,
+			.offset = 0,
+			.range = vk::DeviceSize{ mb.size }
+		};
+
 
 		const auto descriptors = std::array{
 			vk::WriteDescriptorSet
@@ -1056,7 +1220,33 @@ int main()  // NOLINT(bugprone-exception-escape)
 				.dstBinding = 0,
 				.descriptorCount = 1,
 				.descriptorType = vk::DescriptorType::eStorageBuffer,
-				.pBufferInfo = &bufferInfo
+				.pBufferInfo = &vbInfo
+			},
+			vk::WriteDescriptorSet
+			{
+				.dstBinding = 1,
+				.descriptorCount = 1,
+				.descriptorType = vk::DescriptorType::eStorageBuffer,
+				.pBufferInfo = &mbInfo
+			}
+		};
+		commandBuffer.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, triangleLayout, 0, descriptors);
+
+		for(int i = 0; i < 150; i++)
+		{
+			commandBuffer.drawMeshTasksNV(static_cast<U32>(mesh.meshlets.size()), 0);
+		}
+		
+		
+#else
+
+		const auto descriptors = std::array{
+			vk::WriteDescriptorSet
+			{
+				.dstBinding = 0,
+				.descriptorCount = 1,
+				.descriptorType = vk::DescriptorType::eStorageBuffer,
+				.pBufferInfo = &vbInfo
 			}
 		};
 		commandBuffer.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, triangleLayout, 0, descriptors);
@@ -1065,6 +1255,8 @@ int main()  // NOLINT(bugprone-exception-escape)
 		commandBuffer.bindIndexBuffer(ib.buffer, dummyOffset, vk::IndexType::eUint32);
 		//commandBuffer.draw(3, 1, 0, 0);
 		commandBuffer.drawIndexed( static_cast<U32>(mesh.indices.size()), 1, 0, 0, 0);
+#endif
+
 		commandBuffer.endRenderPass();
 
 
@@ -1076,6 +1268,8 @@ int main()  // NOLINT(bugprone-exception-escape)
 		commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
 			vk::PipelineStageFlagBits::eTopOfPipe, vk::DependencyFlagBits::eByRegion,
 			nullptr, nullptr, std::array{ renderEndBarrier });
+
+		commandBuffer.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe, queryPool, 1);
 
 		returnValueOnSuccess(commandBuffer.end());
 
@@ -1108,9 +1302,31 @@ int main()  // NOLINT(bugprone-exception-escape)
 
 		returnValueOnSuccess(queue.presentKHR(presentInfo));
 		returnValueOnSuccess(device.waitIdle());
-		
-		SDL_WaitEvent(nullptr);
-		//SDL_Delay(10);
+
+		auto queryResults = std::array<uint64_t, 2>{};
+		returnValueOnSuccess(device.getQueryPoolResults(queryPool, 0, 2, sizeof(queryResults), queryResults.data(), sizeof(queryResults[0]), vk::QueryResultFlagBits::e64));
+
+		auto frameGpuBegin = static_cast<double>(queryResults[0]);
+		auto frameGpuEnd = static_cast<double>(queryResults[1]);
+
+
+		auto frameCpuEnd = SDL_GetPerformanceCounter();
+		auto freq = SDL_GetPerformanceFrequency();
+
+		auto cpuTime = static_cast<double>(frameCpuEnd - frameCpuBegin) / static_cast<double>(freq) * 1000.0;
+		auto gpuTime = (frameGpuEnd - frameGpuBegin) * static_cast<double>(props.limits.timestampPeriod) * 1e-6;
+
+
+		frameCpuAvg = frameCpuAvg * 0.95 + cpuTime * 0.05;
+		frameGpuAvg = frameGpuAvg * 0.95 + gpuTime * 0.05;
+
+		auto title = std::stringstream{};
+		title << "cpu: " << std::fixed << std::setprecision(2) << frameCpuAvg << " ms" << "    gpu: " << frameGpuAvg << " ms";
+	
+		SDL_SetWindowTitle(window, title.str().c_str());
+
+
+		//SDL_WaitEvent(nullptr);
 	}
 
 
@@ -1119,12 +1335,18 @@ int main()  // NOLINT(bugprone-exception-escape)
 
 	destroyBuffer(vb, device);
 	destroyBuffer(ib, device);
+#if RTX
+	destroyBuffer(mb, device);
+#endif
+
 	device.destroySwapchainKHR(swapchain.swapchain);
 	device.destroyPipeline(trianglePipeline);
 	device.destroySemaphore(acquireSemaphore);
 	device.destroySemaphore(releaseSemaphore);
 	device.destroyFence(fence);
 	device.destroyCommandPool(commandPool);
+	device.destroyQueryPool(queryPool);
+	//device.destroyDescriptorSetLayout()
 	device.destroyPipelineLayout(triangleLayout);
 	for(auto &framebuffer : swapchain.framebuffers)
 	{

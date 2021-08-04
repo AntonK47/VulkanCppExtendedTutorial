@@ -1,0 +1,64 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage: require
+#extension GL_EXT_shader_8bit_storage: require
+#extension GL_EXT_shader_explicit_arithmetic_types: require
+#extension GL_NV_mesh_shader: require
+
+struct Vertex
+{
+	float vx, vy, vz;
+	uint8_t nx, ny, nz;
+	float tu, tv;
+};
+
+layout(binding = 0) readonly buffer Verticies
+{
+	Vertex verticies[];
+};
+
+struct Meshlet
+{
+	uint32_t vertices[64];
+	uint8_t indices[126];
+	uint8_t indexCount;
+	uint8_t vertexCount;
+};
+
+layout(binding = 1) readonly buffer Meshlets
+{
+	Meshlet meshlets[];
+};
+
+layout(location = 0) out vec4 color[];
+
+layout(local_size_x=32) in;
+layout(triangles) out;
+layout(max_vertices=64, max_primitives=42) out;
+
+
+void main()
+{
+
+	uint mi = gl_WorkGroupID.x;
+
+	for(uint i = 0; i < uint(meshlets[mi].vertexCount);i++)
+	{
+
+		uint vi = meshlets[mi].vertices[i];
+		Vertex v = verticies[vi];
+		vec3 position = vec3(v.vx, v.vy, v.vz);
+		vec3 normal = vec3(v.nx, v.ny, v.nz)/127.0 -1.0;
+		vec2 texcoord = vec2(v.tu, v.tv);
+
+		gl_MeshVerticesNV[i].gl_Position = vec4(position + vec3(0,0,0.5), 1.0);
+		color[i] = vec4(normal * 0.5 + vec3(0.5), 1.0);
+	}
+	gl_PrimitiveCountNV = uint(meshlets[mi].indexCount)/3;
+
+	for(uint i = 0; i < uint(meshlets[mi].indexCount); i++)
+	{
+		gl_PrimitiveIndicesNV[i] = uint(meshlets[mi].indices[i]);
+	}
+	
+}
