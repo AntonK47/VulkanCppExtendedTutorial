@@ -51,7 +51,7 @@
 #include <vector>
 
 
-#define RTX 1  // NOLINT(cppcoreguidelines-macro-usage)
+#define RTX  1// NOLINT(cppcoreguidelines-macro-usage)
 
 using U32 = uint32_t;
 
@@ -180,6 +180,7 @@ vk::Device createDevice(const vk::PhysicalDevice physicalDevice, U32 familyIndex
 		},
 		vk::PhysicalDeviceShaderFloat16Int8Features
 		{
+			.shaderFloat16 = vk::Bool32{true},
 			.shaderInt8 = vk::Bool32{true}
 		},
 #if RTX
@@ -690,16 +691,16 @@ void resizeSwapchain(const vk::Device device, const vk::SurfaceKHR surface,
 
 struct Vertex
 {
-	float vx, vy, vz;
+	uint16_t vx, vy, vz, vw;
 	uint8_t nx, ny, nz;
-	float tu, tv;
+	uint16_t tu, tv;
 };
 
 struct Meshlet
 {
 	uint32_t vertices[64];
-	uint8_t indices[126];
-	uint8_t indexCount;
+	uint8_t indices[126*3];
+	uint8_t triangleCount;
 	uint8_t vertexCount;
 };
 
@@ -736,14 +737,14 @@ Mesh loadMesh(const char* path)
 			const auto nz = meshData->normals[n * 3 + 2];
 			const Vertex v =
 			{
-				meshData->positions[p * 3 + 0],
-				meshData->positions[p * 3 + 1],
-				meshData->positions[p * 3 + 2],
+				meshopt_quantizeHalf( meshData->positions[p * 3 + 0]),
+				meshopt_quantizeHalf(meshData->positions[p * 3 + 1]),
+				meshopt_quantizeHalf(meshData->positions[p * 3 + 2]),
 				static_cast<uint8_t>(nx * 127.0f + 127.0f),
 				static_cast<uint8_t>(ny * 127.0f + 127.0f),
 				static_cast<uint8_t>(nz * 127.0f + 127.0f),
-				meshData->texcoords[t * 2 + 0],
-				meshData->texcoords[t * 2 + 1],
+				meshopt_quantizeHalf(meshData->texcoords[t * 2 + 0]),
+				meshopt_quantizeHalf(meshData->texcoords[t * 2 + 1]),
 			};
 
 			// triangulate polygon on the fly; offset-3 is always the first polygon vertex
@@ -775,7 +776,11 @@ Mesh loadMesh(const char* path)
 
 	result.vertices.resize(totalVertices);
 	meshopt_remapVertexBuffer(&result.vertices[0], &vertices[0], totalIndices, sizeof(Vertex), &remap[0]);
-	
+
+	meshopt_optimizeVertexCache(result.indices.data(), result.indices.data(), result.indices.size(), result.vertices.size());
+	meshopt_optimizeVertexFetch(result.vertices.data(), result.indices.data(), result.indices.size(), result.vertices.data(), result.vertices.size(), sizeof(Vertex));
+
+
 	return result;
 }
 
@@ -803,7 +808,7 @@ U32 selectMemoryType(const vk::PhysicalDeviceMemoryProperties& memoryProperties,
 	return result;
 }
 
-Buffer createBuffer(const vk::Device device, const vk::PhysicalDeviceMemoryProperties& memoryProperties, const U32 size, const vk::BufferUsageFlagBits usage)
+Buffer createBuffer(const vk::Device device, const vk::PhysicalDeviceMemoryProperties& memoryProperties, const U32 size, const vk::BufferUsageFlags usage, const vk::MemoryPropertyFlags memoryPropertyFlags)
 {
 
 	const auto createInfo = vk::BufferCreateInfo
@@ -827,7 +832,18 @@ Buffer createBuffer(const vk::Device device, const vk::PhysicalDeviceMemoryPrope
 
 	returnValueOnSuccess(device.bindBufferMemory(buffer, memory, 0));
 
-	auto dataPtr = returnValueOnSuccess(device.mapMemory(memory, 0, memoryRequirements.size));
+	if(memoryPropertyFlags & vk::MemoryPropertyFlagBits::eHostVisible)
+	{
+		auto dataPtr = returnValueOnSuccess(device.mapMemory(memory, 0, memoryRequirements.size));
+		return Buffer
+		{
+			.buffer = buffer,
+			.memory = memory,
+			.data = dataPtr,// std::make_unique<void*>(dataPtr),
+			.size = static_cast<U32>(memoryRequirements.size)
+		};
+	}
+
 
 
 
@@ -835,9 +851,74 @@ Buffer createBuffer(const vk::Device device, const vk::PhysicalDeviceMemoryPrope
 	{
 		.buffer = buffer,
 		.memory = memory,
-		.data = dataPtr,// std::make_unique<void*>(dataPtr),
+		.data = nullptr,// dataPtr,// std::make_unique<void*>(dataPtr),
 		.size = static_cast<U32>(memoryRequirements.size)
 	};
+}
+
+template <class T>
+void uploadBuffer(vk::Device device, const vk::CommandPool commandPool,
+	const vk::CommandBuffer commandBuffer, 
+	const vk::Queue queue, const Buffer& srcBuffer,
+	const Buffer& dstBuffer, std::vector<T> data)
+{
+	const auto size = data.size() * sizeof(T);
+	memcpy(srcBuffer.data, data.data(), size);
+
+	const auto fullBufferRegion = std::array{
+		vk::BufferCopy
+		{
+			.srcOffset = 0,
+			.dstOffset = 0,
+			.size = vk::DeviceSize{size}
+		}
+	};
+	
+
+
+
+
+	returnValueOnSuccess(device.resetCommandPool(commandPool));
+
+	const auto beginInfo = vk::CommandBufferBeginInfo
+	{
+		.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+	};
+	returnValueOnSuccess(commandBuffer.begin(beginInfo));
+
+	commandBuffer.copyBuffer(srcBuffer.buffer, dstBuffer.buffer, fullBufferRegion);
+
+	const auto bufferBarrier = vk::BufferMemoryBarrier
+	{
+		.srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+		.dstAccessMask = vk::AccessFlagBits::eShaderRead,
+		.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		.buffer = dstBuffer.buffer,
+		.offset = 0,
+		.size = size
+	};
+	
+	commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+		vk::PipelineStageFlagBits::eAllCommands,
+		vk::DependencyFlagBits::eByRegion, nullptr,
+		std::array{ bufferBarrier }, nullptr);
+
+	returnValueOnSuccess(commandBuffer.end());
+
+	
+	const auto submits = std::array
+	{
+		vk::SubmitInfo
+		{
+			.commandBufferCount = 1,
+			.pCommandBuffers = &commandBuffer
+		}
+	};
+	returnValueOnSuccess(queue.submit(submits));
+
+	returnValueOnSuccess(device.waitIdle());
+
 }
 
 void destroyBuffer(const Buffer& buffer, const vk::Device device)
@@ -854,7 +935,7 @@ void buildMeshlets(Mesh& mesh)
 	auto meshlet = Meshlet{};
 
 	constexpr auto invalidVertexValue = std::numeric_limits<uint8_t>::max();
-	auto meshletVertices = std::vector<uint8_t>( mesh.vertices.size(), invalidVertexValue);
+	auto meshletVertices = std::vector( mesh.vertices.size(), invalidVertexValue);
 
 	for (U32 i = 0; i < static_cast<U32>(mesh.indices.size()); i+=3)
 	{
@@ -868,7 +949,7 @@ void buildMeshlets(Mesh& mesh)
 
 		const auto newVertexCount = meshlet.vertexCount + (av == invalidVertexValue) + (bv == invalidVertexValue) + (cv == invalidVertexValue);
 
-		if(newVertexCount > 64 || meshlet.indexCount + 3 > 126)
+		if(newVertexCount > 64 || meshlet.triangleCount >= 126)
 		{
 			mesh.meshlets.push_back(meshlet);
 			meshlet = {};
@@ -891,12 +972,13 @@ void buildMeshlets(Mesh& mesh)
 			meshlet.vertices[meshlet.vertexCount++] = c;
 		}
 
-		meshlet.indices[meshlet.indexCount++] = av;
-		meshlet.indices[meshlet.indexCount++] = bv;
-		meshlet.indices[meshlet.indexCount++] = cv;
+		meshlet.indices[meshlet.triangleCount * 3 + 0] = av;
+		meshlet.indices[meshlet.triangleCount * 3 + 1] = bv;
+		meshlet.indices[meshlet.triangleCount * 3 + 2] = cv;
+		meshlet.triangleCount++;
 	}
 
-	if(meshlet.indexCount)
+	if(meshlet.triangleCount)
 	{
 		mesh.meshlets.push_back(meshlet);
 	}
@@ -959,6 +1041,7 @@ int main()  // NOLINT(bugprone-exception-escape)
 	auto layers = std::vector<const char*>{};
 #if defined(_DEBUG)
 	layers.push_back("VK_LAYER_KHRONOS_validation");
+	//layers.push_back("VK_LAYER_NV_nomad_release_public_2021_3_1");
 #endif
 
 	// vk::ApplicationInfo allows the programmer to specify some basic information about the
@@ -1036,15 +1119,15 @@ int main()  // NOLINT(bugprone-exception-escape)
 	auto fence = returnValueOnSuccess(device.createFence({}));
 
 #if RTX
-	auto triangleVertexShader = loadShader(device, "shaders/meshlet.mesh.spv");
+	auto meshMS = loadShader(device, "shaders/mesh.mesh.spv");
 
 #else
-	auto triangleVertexShader = loadShader(device, "shaders/triangle.vert.spv");
+	auto meshMS = loadShader(device, "shaders/triangle.vert.spv");
 
 #endif
 
 
-	auto triangleFragmentShader = loadShader(device, "shaders/triangle.frag.spv");
+	auto meshFS = loadShader(device, "shaders/mesh.frag.spv");
 
 	auto pipelineCache = nullptr;
 
@@ -1063,7 +1146,7 @@ int main()  // NOLINT(bugprone-exception-escape)
 
 	auto triangleLayout = createPipelineLayout(device);
 	auto trianglePipeline = createGraphicsPipeline(device, pipelineCache, renderPass, triangleLayout,
-	                                               triangleVertexShader, triangleFragmentShader);
+	                                               meshMS, meshFS);
 	
 	auto commandPoolCreateInfo = vk::CommandPoolCreateInfo
 	{
@@ -1078,9 +1161,9 @@ int main()  // NOLINT(bugprone-exception-escape)
 		.commandBufferCount = 1
 	};
 	auto commandBuffer = vk::CommandBuffer{ returnValueOnSuccess(device.allocateCommandBuffers(allocateInfo)).front() };
-
 	
 	auto mesh = loadMesh("data/kitten.obj");
+
 
 #if  RTX
 	buildMeshlets(mesh);
@@ -1089,22 +1172,20 @@ int main()  // NOLINT(bugprone-exception-escape)
 
 	const auto memoryProperties = physicalDevice.getMemoryProperties();
 
+	auto scratch = createBuffer(device, memoryProperties, 1024 * 1024 * 1024, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 
 
-	auto vb = createBuffer(device, memoryProperties, 128 * 1024 * 1024, vk::BufferUsageFlagBits::eStorageBuffer);
-	auto ib = createBuffer(device, memoryProperties, 128 * 1024 * 1024, vk::BufferUsageFlagBits::eIndexBuffer);
+	auto vb = createBuffer(device, memoryProperties, 1024 * 1024 * 1024, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
+	auto ib = createBuffer(device, memoryProperties, 1024 * 1024 * 1024, vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
 #if  RTX
-	auto mb = createBuffer(device, memoryProperties, 128 * 1024 * 1024, vk::BufferUsageFlagBits::eStorageBuffer);
+	auto mb = createBuffer(device, memoryProperties, 1024 * 1024 * 1024, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
 #endif
 
-	assert(vb.size >= mesh.vertices.size() * sizeof(Vertex));
-	std::memcpy(vb.data, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex));
 
-	assert(ib.size >= mesh.indices.size() * sizeof(U32));
-	std::memcpy(ib.data, mesh.indices.data(), mesh.indices.size() * sizeof(U32));
+	uploadBuffer(device, commandPool, commandBuffer, queue, scratch, vb, mesh.vertices);
+	uploadBuffer(device, commandPool, commandBuffer, queue, scratch, ib, mesh.indices);
 #if  RTX
-	assert(mb.size >= mesh.meshlets.size() * sizeof(Meshlet));
-	std::memcpy(mb.data, mesh.meshlets.data(), mesh.meshlets.size() * sizeof(Meshlet));
+	uploadBuffer(device, commandPool, commandBuffer, queue, scratch, mb, mesh.meshlets);
 #endif
 
 
@@ -1232,7 +1313,7 @@ int main()  // NOLINT(bugprone-exception-escape)
 		};
 		commandBuffer.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, triangleLayout, 0, descriptors);
 
-		for(int i = 0; i < 150; i++)
+		for(int i = 0; i < 100; i++)
 		{
 			commandBuffer.drawMeshTasksNV(static_cast<U32>(mesh.meshlets.size()), 0);
 		}
@@ -1254,7 +1335,12 @@ int main()  // NOLINT(bugprone-exception-escape)
 		auto dummyOffset = vk::DeviceSize{ 0 };
 		commandBuffer.bindIndexBuffer(ib.buffer, dummyOffset, vk::IndexType::eUint32);
 		//commandBuffer.draw(3, 1, 0, 0);
-		commandBuffer.drawIndexed( static_cast<U32>(mesh.indices.size()), 1, 0, 0, 0);
+
+		for (int i = 0; i < 200; i++)
+		{
+			commandBuffer.drawIndexed(static_cast<U32>(mesh.indices.size()), 1, 0, 0, 0);
+
+		}
 #endif
 
 		commandBuffer.endRenderPass();
@@ -1333,6 +1419,7 @@ int main()  // NOLINT(bugprone-exception-escape)
 	returnValueOnSuccess(device.waitIdle());
 	// Clean up.
 
+	destroyBuffer(scratch, device);
 	destroyBuffer(vb, device);
 	destroyBuffer(ib, device);
 #if RTX
@@ -1356,8 +1443,8 @@ int main()  // NOLINT(bugprone-exception-escape)
 	{
 		device.destroyImageView(imageView);
 	}
-	device.destroyShaderModule(triangleFragmentShader);
-	device.destroyShaderModule(triangleVertexShader);
+	device.destroyShaderModule(meshFS);
+	device.destroyShaderModule(meshMS);
 	device.destroyRenderPass(renderPass);
 	device.destroy();
 

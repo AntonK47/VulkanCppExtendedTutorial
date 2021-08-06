@@ -7,9 +7,9 @@
 
 struct Vertex
 {
-	float vx, vy, vz;
+	float16_t vx, vy, vz, vw;
 	uint8_t nx, ny, nz;
-	float tu, tv;
+	float16_t tu, tv;
 };
 
 layout(binding = 0) readonly buffer Verticies
@@ -20,8 +20,8 @@ layout(binding = 0) readonly buffer Verticies
 struct Meshlet
 {
 	uint32_t vertices[64];
-	uint8_t indices[126];
-	uint8_t indexCount;
+	uint8_t indices[126*3];
+	uint8_t triangleCount;
 	uint8_t vertexCount;
 };
 
@@ -34,7 +34,7 @@ layout(location = 0) out vec4 color[];
 
 layout(local_size_x=32) in;
 layout(triangles) out;
-layout(max_vertices=64, max_primitives=42) out;
+layout(max_vertices=64, max_primitives=126) out;
 
 
 void main()
@@ -42,7 +42,14 @@ void main()
 
 	uint mi = gl_WorkGroupID.x;
 
-	for(uint i = 0; i < uint(meshlets[mi].vertexCount);i++)
+
+	uint ti = gl_LocalInvocationID.x;
+
+	uint vertexCount = uint(meshlets[mi].vertexCount);
+	uint indexCount = uint(meshlets[mi].triangleCount)*3;
+
+
+	for(uint i = ti; i < vertexCount;i+=32)
 	{
 
 		uint vi = meshlets[mi].vertices[i];
@@ -54,11 +61,17 @@ void main()
 		gl_MeshVerticesNV[i].gl_Position = vec4(position + vec3(0,0,0.5), 1.0);
 		color[i] = vec4(normal * 0.5 + vec3(0.5), 1.0);
 	}
-	gl_PrimitiveCountNV = uint(meshlets[mi].indexCount)/3;
 
-	for(uint i = 0; i < uint(meshlets[mi].indexCount); i++)
+	uint indexChunkCount = (indexCount+3)/4;
+	for(uint i = ti; i < indexCount; i+=32)
 	{
+		//writePackedPrimitiveIndices4x8NV(i*4, meshlets[mi].indicesPacked[i]);
 		gl_PrimitiveIndicesNV[i] = uint(meshlets[mi].indices[i]);
 	}
 	
+	if(ti == 0)
+	{
+		gl_PrimitiveCountNV = uint(meshlets[mi].triangleCount);
+	}
+
 }
