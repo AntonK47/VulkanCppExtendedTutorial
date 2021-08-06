@@ -740,6 +740,7 @@ Mesh loadMesh(const char* path)
 				meshopt_quantizeHalf( meshData->positions[p * 3 + 0]),
 				meshopt_quantizeHalf(meshData->positions[p * 3 + 1]),
 				meshopt_quantizeHalf(meshData->positions[p * 3 + 2]),
+				0,
 				static_cast<uint8_t>(nx * 127.0f + 127.0f),
 				static_cast<uint8_t>(ny * 127.0f + 127.0f),
 				static_cast<uint8_t>(nz * 127.0f + 127.0f),
