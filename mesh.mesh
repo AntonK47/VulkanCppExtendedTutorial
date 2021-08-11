@@ -5,6 +5,8 @@
 #extension GL_EXT_shader_explicit_arithmetic_types: require
 #extension GL_NV_mesh_shader: require
 
+#define DEBUG 1
+
 struct Vertex
 {
 	float16_t vx, vy, vz, vw;
@@ -36,6 +38,16 @@ layout(local_size_x=32) in;
 layout(triangles) out;
 layout(max_vertices=64, max_primitives=126) out;
 
+uint hash(uint a)
+{
+   a = (a+0x7ed55d16) + (a<<12);
+   a = (a^0xc761c23c) ^ (a>>19);
+   a = (a+0x165667b1) + (a<<5);
+   a = (a+0xd3a2646c) ^ (a<<9);
+   a = (a+0xfd7046c5) + (a<<3);
+   a = (a^0xb55a4f09) ^ (a>>16);
+   return a;
+}
 
 void main()
 {
@@ -46,7 +58,14 @@ void main()
 	uint ti = gl_LocalInvocationID.x;
 
 	uint vertexCount = uint(meshlets[mi].vertexCount);
-	uint indexCount = uint(meshlets[mi].triangleCount)*3;
+	uint triangleCount = uint(meshlets[mi].triangleCount);
+	uint indexCount = triangleCount*3;
+
+#if DEBUG
+	uint mhash = hash(mi);
+	vec3 mcolor = vec3(float(mhash & 255), float((mhash >>8) & 255), float((mhash>>16) & 255)) / 255.0;
+#endif
+
 
 
 	for(uint i = ti; i < vertexCount;i+=32)
@@ -60,6 +79,10 @@ void main()
 
 		gl_MeshVerticesNV[i].gl_Position = vec4(position + vec3(0,0,0.5), 1.0);
 		color[i] = vec4(normal * 0.5 + vec3(0.5), 1.0);
+
+	#if DEBUG
+		color[i] = vec4(mcolor, 1.0);
+	#endif
 	}
 
 	uint indexChunkCount = (indexCount+3)/4;

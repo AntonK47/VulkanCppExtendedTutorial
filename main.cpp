@@ -51,7 +51,6 @@
 #include <vector>
 
 
-#define RTX  1// NOLINT(cppcoreguidelines-macro-usage)
 
 using U32 = uint32_t;
 
@@ -131,7 +130,7 @@ vk::PhysicalDevice pickPhysicalDevice(const std::vector<vk::PhysicalDevice>& phy
 	return result;
 }
 
-vk::Device createDevice(const vk::PhysicalDevice physicalDevice, U32 familyIndex)
+vk::Device createDevice(const vk::PhysicalDevice physicalDevice, U32 familyIndex, const bool rtxSupported)
 {
 	auto queuePriorities = std::array<float, 1>{ 1.0f };
 	auto deviceQueueCreateInfo = vk::DeviceQueueCreateInfo
@@ -142,66 +141,102 @@ vk::Device createDevice(const vk::PhysicalDevice physicalDevice, U32 familyIndex
 	};
 
 
-	auto extensions = std::array
+	auto extensions = std::vector
 	{
 		VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 		VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
 		VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
-		VK_KHR_8BIT_STORAGE_EXTENSION_NAME,
-#if RTX
-		VK_NV_MESH_SHADER_EXTENSION_NAME
-#endif
+		VK_KHR_8BIT_STORAGE_EXTENSION_NAME
 	};
-	
-
-	const auto features = vk::StructureChain<vk::PhysicalDeviceFeatures2,
-		vk::PhysicalDevice16BitStorageFeatures,
-		vk::PhysicalDevice8BitStorageFeatures,
-		vk::PhysicalDeviceShaderFloat16Int8Features
-#if RTX
-		,vk::PhysicalDeviceMeshShaderFeaturesNV
-#endif
-
-	>
+	if(rtxSupported)
 	{
-		vk::PhysicalDeviceFeatures2
-		{
-			.features = vk::PhysicalDeviceFeatures{}
-		},
-		vk::PhysicalDevice16BitStorageFeatures
-		{
-			.storageBuffer16BitAccess = vk::Bool32{true},
-			.uniformAndStorageBuffer16BitAccess = vk::Bool32{true}
-		},
-		vk::PhysicalDevice8BitStorageFeatures
-		{
-			.storageBuffer8BitAccess = vk::Bool32{true},
-			.uniformAndStorageBuffer8BitAccess = vk::Bool32{true}
-		},
-		vk::PhysicalDeviceShaderFloat16Int8Features
-		{
-			.shaderFloat16 = vk::Bool32{true},
-			.shaderInt8 = vk::Bool32{true}
-		},
-#if RTX
-		vk::PhysicalDeviceMeshShaderFeaturesNV
-		{
-			.taskShader = vk::Bool32{true},
-			.meshShader = vk::Bool32{true}
-		}
-#endif
+		extensions.push_back(VK_NV_MESH_SHADER_EXTENSION_NAME);
+	}
+	auto deviceCreateInfo = vk::DeviceCreateInfo{};
 
-	};
-
-	const auto deviceCreateInfo = vk::DeviceCreateInfo
+	if(rtxSupported)
 	{
-		.pNext = &features.get(),
-		.queueCreateInfoCount = 1,
-		.pQueueCreateInfos = &deviceQueueCreateInfo,
-		.enabledExtensionCount = static_cast<U32>(extensions.size()),
-		.ppEnabledExtensionNames = extensions.data(),
-		
-	};
+		const auto features = vk::StructureChain<vk::PhysicalDeviceFeatures2,
+			vk::PhysicalDevice16BitStorageFeatures,
+			vk::PhysicalDevice8BitStorageFeatures,
+			vk::PhysicalDeviceShaderFloat16Int8Features,
+			vk::PhysicalDeviceMeshShaderFeaturesNV>
+		{
+			vk::PhysicalDeviceFeatures2
+			{
+				.features = vk::PhysicalDeviceFeatures{}
+			},
+			vk::PhysicalDevice16BitStorageFeatures
+			{
+				.storageBuffer16BitAccess = vk::Bool32{true},
+				.uniformAndStorageBuffer16BitAccess = vk::Bool32{true}
+			},
+			vk::PhysicalDevice8BitStorageFeatures
+			{
+				.storageBuffer8BitAccess = vk::Bool32{true},
+				.uniformAndStorageBuffer8BitAccess = vk::Bool32{true}
+			},
+			vk::PhysicalDeviceShaderFloat16Int8Features
+			{
+				.shaderFloat16 = vk::Bool32{true},
+				.shaderInt8 = vk::Bool32{true}
+			},
+			vk::PhysicalDeviceMeshShaderFeaturesNV
+			{
+				.taskShader = vk::Bool32{rtxSupported},
+				.meshShader = vk::Bool32{rtxSupported}
+			}
+		};
+
+		deviceCreateInfo = vk::DeviceCreateInfo
+		{
+			.pNext = &features.get(),
+			.queueCreateInfoCount = 1,
+			.pQueueCreateInfos = &deviceQueueCreateInfo,
+			.enabledExtensionCount = static_cast<U32>(extensions.size()),
+			.ppEnabledExtensionNames = extensions.data(),
+
+		};
+	}
+	else
+	{
+		const auto features = vk::StructureChain<vk::PhysicalDeviceFeatures2,
+			vk::PhysicalDevice16BitStorageFeatures,
+			vk::PhysicalDevice8BitStorageFeatures,
+			vk::PhysicalDeviceShaderFloat16Int8Features>
+		{
+			vk::PhysicalDeviceFeatures2
+			{
+				.features = vk::PhysicalDeviceFeatures{}
+			},
+			vk::PhysicalDevice16BitStorageFeatures
+			{
+				.storageBuffer16BitAccess = vk::Bool32{true},
+				.uniformAndStorageBuffer16BitAccess = vk::Bool32{true}
+			},
+			vk::PhysicalDevice8BitStorageFeatures
+			{
+				.storageBuffer8BitAccess = vk::Bool32{true},
+				.uniformAndStorageBuffer8BitAccess = vk::Bool32{true}
+			},
+			vk::PhysicalDeviceShaderFloat16Int8Features
+			{
+				.shaderFloat16 = vk::Bool32{true},
+				.shaderInt8 = vk::Bool32{true}
+			}
+		};
+
+		deviceCreateInfo = vk::DeviceCreateInfo
+		{
+			.pNext = &features.get(),
+			.queueCreateInfoCount = 1,
+			.pQueueCreateInfos = &deviceQueueCreateInfo,
+			.enabledExtensionCount = static_cast<U32>(extensions.size()),
+			.ppEnabledExtensionNames = extensions.data(),
+
+		};
+	}
+
 	return returnValueOnSuccess(physicalDevice.createDevice(deviceCreateInfo));
 }
 
@@ -365,43 +400,45 @@ vk::ShaderModule loadShader(const vk::Device device, const char* path)
 	return returnValueOnSuccess(device.createShaderModule(createInfo));
 }
 
-vk::PipelineLayout createPipelineLayout(const vk::Device device)
+vk::PipelineLayout createPipelineLayout(const vk::Device device, const bool rtxEnabled)
 {
-#if RTX
-	const auto setBindings = std::array
+	auto setBindings = std::vector<vk::DescriptorSetLayoutBinding>{};
+	
+	if (!rtxEnabled)
 	{
-		vk::DescriptorSetLayoutBinding
-		{
-			.binding = 0,
-			.descriptorType = vk::DescriptorType::eStorageBuffer,
-			.descriptorCount = 1,
-			.stageFlags = vk::ShaderStageFlagBits::eMeshNV
-		},
-		vk::DescriptorSetLayoutBinding
-		{
-			.binding = 1,
-			.descriptorType = vk::DescriptorType::eStorageBuffer,
-			.descriptorCount = 1,
-			.stageFlags = vk::ShaderStageFlagBits::eMeshNV
-		}
-	};
-#else
-	const auto setBindings = std::array{ vk::DescriptorSetLayoutBinding
-		{
-			.binding = 0,
-			.descriptorType = vk::DescriptorType::eStorageBuffer,
-			.descriptorCount = 1,
-			.stageFlags = vk::ShaderStageFlagBits::eVertex
-		}
-	};
-#endif
+		setBindings.push_back(vk::DescriptorSetLayoutBinding
+			{
+				.binding = 0,
+				.descriptorType = vk::DescriptorType::eStorageBuffer,
+				.descriptorCount = 1,
+				.stageFlags = vk::ShaderStageFlagBits::eVertex
+			});
+	}
+	else
+	{
+		setBindings.push_back(vk::DescriptorSetLayoutBinding
+			{
+				.binding = 0,
+				.descriptorType = vk::DescriptorType::eStorageBuffer,
+				.descriptorCount = 1,
+				.stageFlags = vk::ShaderStageFlagBits::eMeshNV
+			});
+		setBindings.push_back(vk::DescriptorSetLayoutBinding
+			{
+				.binding = 1,
+				.descriptorType = vk::DescriptorType::eStorageBuffer,
+				.descriptorCount = 1,
+				.stageFlags = vk::ShaderStageFlagBits::eMeshNV
+			});
+		
+	}
 
 	
 
 	const auto setLayoutCreateInfo = vk::DescriptorSetLayoutCreateInfo
 	{
 		.flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
-		.bindingCount = setBindings.size(),
+		.bindingCount = static_cast<U32>(setBindings.size()),
 		.pBindings = setBindings.data()
 	};
 
@@ -422,26 +459,16 @@ vk::PipelineLayout createPipelineLayout(const vk::Device device)
 
 vk::Pipeline createGraphicsPipeline(vk::Device device, vk::PipelineCache pipelineCache, vk::RenderPass renderPass,
                                     vk::PipelineLayout pipelineLayout, vk::ShaderModule triangleVertexShader,
-                                    vk::ShaderModule triangleFragmentShader)
+                                    vk::ShaderModule triangleFragmentShader, const bool rtxEnabled)
 {
 	auto stages = std::array
 	{
-#if RTX
 		vk::PipelineShaderStageCreateInfo
 		{
-			.stage = vk::ShaderStageFlagBits::eMeshNV,
+			.stage = rtxEnabled?vk::ShaderStageFlagBits::eMeshNV: vk::ShaderStageFlagBits::eVertex,
 			.module = triangleVertexShader,
 			.pName = "main"
 		},
-#else
-		vk::PipelineShaderStageCreateInfo
-		{
-			.stage = vk::ShaderStageFlagBits::eVertex,
-			.module = triangleVertexShader,
-			.pName = "main"
-		},
-#endif
-
 		vk::PipelineShaderStageCreateInfo
 		{
 			.stage = vk::ShaderStageFlagBits::eFragment,
@@ -1042,6 +1069,8 @@ int main()  // NOLINT(bugprone-exception-escape)
 	auto layers = std::vector<const char*>{};
 #if defined(_DEBUG)
 	layers.push_back("VK_LAYER_KHRONOS_validation");
+	//provides VK_KHR_synchronization2 extension even if the underlying driver do not provide the extension
+	//layers.push_back("VK_LAYER_KHRONOS_synchronization2");
 	//layers.push_back("VK_LAYER_NV_nomad_release_public_2021_3_1");
 #endif
 
@@ -1068,8 +1097,7 @@ int main()  // NOLINT(bugprone-exception-escape)
 		.enabledExtensionCount = static_cast<U32>(extensions.size()),
 		.ppEnabledExtensionNames = extensions.data(),
 	};
-
-	// Create the Vulkan instance.
+	
 	auto resultValue = vk::createInstance(instInfo);
 	if (resultValue.result != vk::Result::eSuccess)
 	{
@@ -1095,13 +1123,27 @@ int main()  // NOLINT(bugprone-exception-escape)
 	auto physicalDevices = returnValueOnSuccess(instance.enumeratePhysicalDevices());
 	auto physicalDevice = pickPhysicalDevice(physicalDevices);
 
+	auto deviceExtensions = returnValueOnSuccess(physicalDevice.enumerateDeviceExtensionProperties());
+
+	auto rtxSupported = false;
+
+	for(auto& ext: deviceExtensions)
+	{
+		if(strcmp(ext.extensionName.data(), "VK_NV_mesh_shader") == 0)
+		{
+			rtxSupported = true;
+			break;
+		}
+	}
+	bool rtxEnabled = rtxSupported;
+	
 	auto familyIndex = getGraphicsQueueFamilyIndex(physicalDevice);
 	returnValueOnSuccess(physicalDevice.getSurfaceSupportKHR(familyIndex, surface));
 
 
 	auto format = getSwapchainFormat(physicalDevice, surface);
 
-	auto device = createDevice(physicalDevice, familyIndex);
+	auto device = createDevice(physicalDevice, familyIndex, rtxSupported);
 	VULKAN_HPP_DEFAULT_DISPATCHER.init(device);
 	auto width = 0, height = 0;
 	SDL_GetWindowSize(window, &width, &height);
@@ -1118,22 +1160,18 @@ int main()  // NOLINT(bugprone-exception-escape)
 	auto acquireSemaphore = createSemaphore(device);
 	auto releaseSemaphore = createSemaphore(device);
 	auto fence = returnValueOnSuccess(device.createFence({}));
-
-#if RTX
-	auto meshMS = loadShader(device, "shaders/mesh.mesh.spv");
-
-#else
-	auto meshMS = loadShader(device, "shaders/triangle.vert.spv");
-
-#endif
+	
+	auto meshMS = vk::ShaderModule{};
+	if (rtxSupported)
+	{
+		meshMS = loadShader(device, "shaders/mesh.mesh.spv");
+	}
 
 
+	auto meshVS = loadShader(device, "shaders/triangle.vert.spv");
 	auto meshFS = loadShader(device, "shaders/mesh.frag.spv");
 
 	auto pipelineCache = nullptr;
-
-	
-
 	auto queue = device.getQueue(familyIndex, 0);
 
 	auto renderPass = createRenderPass(device, format);
@@ -1145,9 +1183,20 @@ int main()  // NOLINT(bugprone-exception-escape)
 
 
 
-	auto triangleLayout = createPipelineLayout(device);
-	auto trianglePipeline = createGraphicsPipeline(device, pipelineCache, renderPass, triangleLayout,
-	                                               meshMS, meshFS);
+	auto meshLayout = createPipelineLayout(device, false);
+	auto meshLayoutRtx = vk::PipelineLayout{};
+	if(rtxSupported)
+	{
+		meshLayoutRtx = createPipelineLayout(device, true);
+	}
+
+	auto meshPipeline = createGraphicsPipeline(device, pipelineCache, renderPass, meshLayout,meshVS, meshFS, false);
+	auto meshPipelineRtx = vk::Pipeline{};
+	if(rtxSupported)
+	{
+		meshPipelineRtx = createGraphicsPipeline(device, pipelineCache, renderPass, meshLayoutRtx, meshMS, meshFS, true);
+	}
+	
 	
 	auto commandPoolCreateInfo = vk::CommandPoolCreateInfo
 	{
@@ -1166,9 +1215,10 @@ int main()  // NOLINT(bugprone-exception-escape)
 	auto mesh = loadMesh("data/kitten.obj");
 
 
-#if  RTX
-	buildMeshlets(mesh);
-#endif
+	if (rtxSupported)
+	{
+		buildMeshlets(mesh);
+	}
 
 
 	const auto memoryProperties = physicalDevice.getMemoryProperties();
@@ -1178,16 +1228,19 @@ int main()  // NOLINT(bugprone-exception-escape)
 
 	auto vb = createBuffer(device, memoryProperties, 1024 * 1024 * 1024, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
 	auto ib = createBuffer(device, memoryProperties, 1024 * 1024 * 1024, vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
-#if  RTX
-	auto mb = createBuffer(device, memoryProperties, 1024 * 1024 * 1024, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
-#endif
+
 
 
 	uploadBuffer(device, commandPool, commandBuffer, queue, scratch, vb, mesh.vertices);
 	uploadBuffer(device, commandPool, commandBuffer, queue, scratch, ib, mesh.indices);
-#if  RTX
-	uploadBuffer(device, commandPool, commandBuffer, queue, scratch, mb, mesh.meshlets);
-#endif
+
+	auto mb = Buffer{};
+	if(rtxSupported)
+	{
+		mb = createBuffer(device, memoryProperties, 1024 * 1024 * 1024, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
+		uploadBuffer(device, commandPool, commandBuffer, queue, scratch, mb, mesh.meshlets);
+	}
+
 
 
 
@@ -1206,6 +1259,16 @@ int main()  // NOLINT(bugprone-exception-escape)
 		{
 			switch (event.type)
 			{
+			case SDL_KEYDOWN:
+				switch (event.key.keysym.sym)
+				{
+				case SDLK_SPACE:
+					rtxEnabled = !rtxEnabled;
+					break;
+				default:
+					break;
+				}
+				break;
 
 			case SDL_QUIT:
 				stillRunning = false;
@@ -1278,7 +1341,8 @@ int main()  // NOLINT(bugprone-exception-escape)
 		auto scissor = vk::Rect2D{ { 0, 0 }, { swapchain.width, swapchain.height } };
 		commandBuffer.setViewport(0, 1, &viewport);
 		commandBuffer.setScissor(0, 1, &scissor);
-		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, trianglePipeline);
+	
+		
 
 
 		const auto vbInfo = vk::DescriptorBufferInfo
@@ -1287,62 +1351,68 @@ int main()  // NOLINT(bugprone-exception-escape)
 			.offset = 0,
 			.range = vk::DeviceSize{ vb.size }
 		};
-#if RTX
-		const auto mbInfo = vk::DescriptorBufferInfo
+		if (rtxEnabled)
 		{
-			.buffer = mb.buffer,
-			.offset = 0,
-			.range = vk::DeviceSize{ mb.size }
-		};
+			commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, meshPipelineRtx);
 
-
-		const auto descriptors = std::array{
-			vk::WriteDescriptorSet
+			const auto mbInfo = vk::DescriptorBufferInfo
 			{
-				.dstBinding = 0,
-				.descriptorCount = 1,
-				.descriptorType = vk::DescriptorType::eStorageBuffer,
-				.pBufferInfo = &vbInfo
-			},
-			vk::WriteDescriptorSet
-			{
-				.dstBinding = 1,
-				.descriptorCount = 1,
-				.descriptorType = vk::DescriptorType::eStorageBuffer,
-				.pBufferInfo = &mbInfo
-			}
-		};
-		commandBuffer.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, triangleLayout, 0, descriptors);
-
-		for(int i = 0; i < 100; i++)
-		{
-			commandBuffer.drawMeshTasksNV(static_cast<U32>(mesh.meshlets.size()), 0);
-		}
+				.buffer = mb.buffer,
+				.offset = 0,
+				.range = vk::DeviceSize{ mb.size }
+			};
 		
 		
-#else
 
-		const auto descriptors = std::array{
-			vk::WriteDescriptorSet
+			const auto descriptors = std::array
 			{
-				.dstBinding = 0,
-				.descriptorCount = 1,
-				.descriptorType = vk::DescriptorType::eStorageBuffer,
-				.pBufferInfo = &vbInfo
+				vk::WriteDescriptorSet
+				{
+					.dstBinding = 0,
+					.descriptorCount = 1,
+					.descriptorType = vk::DescriptorType::eStorageBuffer,
+					.pBufferInfo = &vbInfo
+				},
+				vk::WriteDescriptorSet
+				{
+					.dstBinding = 1,
+					.descriptorCount = 1,
+					.descriptorType = vk::DescriptorType::eStorageBuffer,
+					.pBufferInfo = &mbInfo
+				}
+			};
+			commandBuffer.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, meshLayoutRtx, 0, descriptors);
+
+			for(int i = 0; i < 4000; i++)
+			{
+				commandBuffer.drawMeshTasksNV(static_cast<U32>(mesh.meshlets.size()), 0);
 			}
-		};
-		commandBuffer.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, triangleLayout, 0, descriptors);
-
-		auto dummyOffset = vk::DeviceSize{ 0 };
-		commandBuffer.bindIndexBuffer(ib.buffer, dummyOffset, vk::IndexType::eUint32);
-		//commandBuffer.draw(3, 1, 0, 0);
-
-		for (int i = 0; i < 200; i++)
-		{
-			commandBuffer.drawIndexed(static_cast<U32>(mesh.indices.size()), 1, 0, 0, 0);
-
 		}
-#endif
+		else
+		{
+			commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, meshPipeline);
+
+			const auto descriptors = std::array
+			{
+				vk::WriteDescriptorSet
+				{
+					.dstBinding = 0,
+					.descriptorCount = 1,
+					.descriptorType = vk::DescriptorType::eStorageBuffer,
+					.pBufferInfo = &vbInfo
+				}
+			};
+			commandBuffer.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, meshLayout, 0, descriptors);
+
+			auto dummyOffset = vk::DeviceSize{ 0 };
+			commandBuffer.bindIndexBuffer(ib.buffer, dummyOffset, vk::IndexType::eUint32);
+
+			for (int i = 0; i < 4000; i++)
+			{
+				commandBuffer.drawIndexed(static_cast<U32>(mesh.indices.size()), 1, 0, 0, 0);
+
+			}
+		}
 
 		commandBuffer.endRenderPass();
 
@@ -1408,7 +1478,7 @@ int main()  // NOLINT(bugprone-exception-escape)
 		frameGpuAvg = frameGpuAvg * 0.95 + gpuTime * 0.05;
 
 		auto title = std::stringstream{};
-		title << "cpu: " << std::fixed << std::setprecision(2) << frameCpuAvg << " ms" << "    gpu: " << frameGpuAvg << " ms";
+		title << "cpu: " << std::fixed << std::setprecision(2) << frameCpuAvg << " ms" << "    gpu: " << frameGpuAvg << " ms" << " RTX " << (rtxEnabled ? "ON":"OFF");
 	
 		SDL_SetWindowTitle(window, title.str().c_str());
 
@@ -1423,19 +1493,28 @@ int main()  // NOLINT(bugprone-exception-escape)
 	destroyBuffer(scratch, device);
 	destroyBuffer(vb, device);
 	destroyBuffer(ib, device);
-#if RTX
-	destroyBuffer(mb, device);
-#endif
+	if (rtxSupported)
+	{
+		destroyBuffer(mb, device);
+	}
 
 	device.destroySwapchainKHR(swapchain.swapchain);
-	device.destroyPipeline(trianglePipeline);
+	device.destroyPipeline(meshPipeline);
+	if(rtxSupported)
+	{
+		device.destroyPipeline(meshPipelineRtx);
+	}
 	device.destroySemaphore(acquireSemaphore);
 	device.destroySemaphore(releaseSemaphore);
 	device.destroyFence(fence);
 	device.destroyCommandPool(commandPool);
 	device.destroyQueryPool(queryPool);
 	//device.destroyDescriptorSetLayout()
-	device.destroyPipelineLayout(triangleLayout);
+	device.destroyPipelineLayout(meshLayout);
+	if(rtxSupported)
+	{
+		device.destroyPipelineLayout(meshLayoutRtx);
+	}
 	for(auto &framebuffer : swapchain.framebuffers)
 	{
 		device.destroy(framebuffer);
@@ -1445,7 +1524,11 @@ int main()  // NOLINT(bugprone-exception-escape)
 		device.destroyImageView(imageView);
 	}
 	device.destroyShaderModule(meshFS);
-	device.destroyShaderModule(meshMS);
+	device.destroyShaderModule(meshVS);
+	if(rtxSupported)
+	{
+		device.destroyShaderModule(meshMS);
+	}
 	device.destroyRenderPass(renderPass);
 	device.destroy();
 
