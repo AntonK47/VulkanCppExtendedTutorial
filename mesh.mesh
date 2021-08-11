@@ -5,27 +5,18 @@
 #extension GL_EXT_shader_explicit_arithmetic_types: require
 #extension GL_NV_mesh_shader: require
 
+#extension GL_GOOGLE_include_directive: require
+#include "mesh.h"
 #define DEBUG 1
 
-struct Vertex
-{
-	float16_t vx, vy, vz, vw;
-	uint8_t nx, ny, nz;
-	float16_t tu, tv;
-};
+
 
 layout(binding = 0) readonly buffer Verticies
 {
 	Vertex verticies[];
 };
 
-struct Meshlet
-{
-	uint32_t vertices[64];
-	uint8_t indices[126*3];
-	uint8_t triangleCount;
-	uint8_t vertexCount;
-};
+
 
 layout(binding = 1) readonly buffer Meshlets
 {

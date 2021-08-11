@@ -4,13 +4,9 @@
 #extension GL_EXT_shader_8bit_storage: require
 #extension GL_EXT_shader_explicit_arithmetic_types: require
 
+#extension GL_GOOGLE_include_directive: require
+#include "mesh.h"
 
-struct Vertex
-{
-	float16_t vx, vy, vz, vw;
-	uint8_t nx, ny, nz;
-	float16_t tu, tv;
-};
 
 layout(binding=0) readonly buffer Verticies
 {
