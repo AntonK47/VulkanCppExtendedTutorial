@@ -206,6 +206,8 @@
     <ClCompile Include="meshoptimizer\src\vfetchanalyzer.cpp" />
     <ClCompile Include="meshoptimizer\src\vfetchoptimizer.cpp" />
     <ClCompile Include="shaders.cpp" />
+    <ClCompile Include="spirv_reflect.c" />
+    <ClCompile Include="swapchain.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="common.h" />
@@ -214,6 +216,8 @@
     <ClInclude Include="meshoptimizer\extern\fast_obj.h" />
     <ClInclude Include="meshoptimizer\src\meshoptimizer.h" />
     <ClInclude Include="shaders.h" />
+    <ClInclude Include="spirv_reflect.h" />
+    <ClInclude Include="swapchain.h" />
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="mesh.frag">

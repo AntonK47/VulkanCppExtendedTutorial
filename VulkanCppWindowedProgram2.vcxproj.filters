@@ -8,6 +8,9 @@
     <Filter Include="meshoptimizer">
       <UniqueIdentifier>{28f35de2-9564-41d2-94c0-e6d965038981}</UniqueIdentifier>
     </Filter>
+    <Filter Include="spirv-reflect">
+      <UniqueIdentifier>{86b082b0-7ad3-4d9e-8b34-a00974469580}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
@@ -57,6 +60,10 @@
       <Filter>meshoptimizer</Filter>
     </ClCompile>
     <ClCompile Include="shaders.cpp" />
+    <ClCompile Include="swapchain.cpp" />
+    <ClCompile Include="spirv_reflect.c">
+      <Filter>spirv-reflect</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="main.h" />
@@ -71,6 +78,10 @@
     </ClInclude>
     <ClInclude Include="shaders.h" />
     <ClInclude Include="common.h" />
+    <ClInclude Include="swapchain.h" />
+    <ClInclude Include="spirv_reflect.h">
+      <Filter>spirv-reflect</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="mesh.frag">

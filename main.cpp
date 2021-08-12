@@ -1,4 +1,3 @@
-
 #if defined(__ANDROID__)
 #define VK_USE_PLATFORM_ANDROID_KHR
 #elif defined(__linux__)
@@ -17,7 +16,6 @@
 
 // Tell SDL not to mess with main()
 #define SDL_MAIN_HANDLED
-
 
 
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1  // NOLINT(cppcoreguidelines-macro-usage)
@@ -47,8 +45,13 @@
 #include <vector>
 
 #include "common.h"
+#include "spirv_reflect.h"
 #include "shaders.h"
+#include "swapchain.h"
+#include "spirv_reflect.h"
 
+
+VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE;
 
 void setupConsole(const std::wstring& title)
 {
@@ -135,7 +138,8 @@ vk::Device createDevice(const vk::PhysicalDevice physicalDevice, U32 familyIndex
 		VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 		VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
 		VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
-		VK_KHR_8BIT_STORAGE_EXTENSION_NAME
+		VK_KHR_8BIT_STORAGE_EXTENSION_NAME,
+		VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME
 	};
 	if(rtxSupported)
 	{
@@ -149,7 +153,8 @@ vk::Device createDevice(const vk::PhysicalDevice physicalDevice, U32 familyIndex
 			vk::PhysicalDevice16BitStorageFeatures,
 			vk::PhysicalDevice8BitStorageFeatures,
 			vk::PhysicalDeviceShaderFloat16Int8Features,
-			vk::PhysicalDeviceMeshShaderFeaturesNV>
+			vk::PhysicalDeviceMeshShaderFeaturesNV,
+			vk::PhysicalDeviceSynchronization2FeaturesKHR>
 		{
 			vk::PhysicalDeviceFeatures2
 			{
@@ -174,6 +179,10 @@ vk::Device createDevice(const vk::PhysicalDevice physicalDevice, U32 familyIndex
 			{
 				.taskShader = vk::Bool32{rtxSupported},
 				.meshShader = vk::Bool32{rtxSupported}
+			},
+			vk::PhysicalDeviceSynchronization2FeaturesKHR
+			{
+				.synchronization2 = vk::Bool32{true}
 			}
 		};
 
@@ -192,7 +201,8 @@ vk::Device createDevice(const vk::PhysicalDevice physicalDevice, U32 familyIndex
 		const auto features = vk::StructureChain<vk::PhysicalDeviceFeatures2,
 			vk::PhysicalDevice16BitStorageFeatures,
 			vk::PhysicalDevice8BitStorageFeatures,
-			vk::PhysicalDeviceShaderFloat16Int8Features>
+			vk::PhysicalDeviceShaderFloat16Int8Features,
+			vk::PhysicalDeviceSynchronization2FeaturesKHR>
 		{
 			vk::PhysicalDeviceFeatures2
 			{
@@ -212,6 +222,10 @@ vk::Device createDevice(const vk::PhysicalDevice physicalDevice, U32 familyIndex
 			{
 				.shaderFloat16 = vk::Bool32{true},
 				.shaderInt8 = vk::Bool32{true}
+			},
+			vk::PhysicalDeviceSynchronization2FeaturesKHR
+			{
+				.synchronization2 = vk::Bool32{true}
 			}
 		};
 
@@ -249,44 +263,7 @@ vk::Format getSwapchainFormat(const vk::PhysicalDevice physicalDevice, const vk:
 	return formats[0].format;
 }
 
-vk::SwapchainKHR createSwapchain(const vk::Device device, vk::SurfaceKHR surface,
-                                 vk::SurfaceCapabilitiesKHR surfaceCapabilities, U32 familyIndex, U32 width, U32 height,
-                                 vk::Format format, vk::SwapchainKHR oldSwapchain)
-{
-	
-	auto supportedCompositeAlpha =
-		surfaceCapabilities.supportedCompositeAlpha & vk::CompositeAlphaFlagBitsKHR::eOpaque ? vk::CompositeAlphaFlagBitsKHR::eOpaque :
-		surfaceCapabilities.supportedCompositeAlpha & vk::CompositeAlphaFlagBitsKHR::ePreMultiplied
-		? vk::CompositeAlphaFlagBitsKHR::ePreMultiplied
-		:
-		surfaceCapabilities.supportedCompositeAlpha & vk::CompositeAlphaFlagBitsKHR::ePostMultiplied
-		? vk::CompositeAlphaFlagBitsKHR::ePostMultiplied
-		:
-		vk::CompositeAlphaFlagBitsKHR::eInherit;
 
-	const auto swapchainCreateInfo = vk::SwapchainCreateInfoKHR
-	{
-		.surface = surface,
-		.minImageCount = std::clamp(2u, surfaceCapabilities.minImageCount, surfaceCapabilities.maxImageCount),
-		.imageFormat = format,
-		.imageColorSpace = vk::ColorSpaceKHR::eSrgbNonlinear, //!
-		.imageExtent =
-			vk::Extent2D
-			{
-				.width = width,
-				.height = height
-			},
-		.imageArrayLayers = 1,
-		.imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
-		.queueFamilyIndexCount = 1,
-		.pQueueFamilyIndices = std::array<U32,1>{ familyIndex }.data(),
-		.preTransform = surfaceCapabilities.currentTransform,
-		.compositeAlpha = supportedCompositeAlpha,
-		.presentMode = vk::PresentModeKHR::eFifo,
-		.oldSwapchain = oldSwapchain
-	};
-	return returnValueOnSuccess(device.createSwapchainKHR(swapchainCreateInfo));
-}
 
 vk::Semaphore createSemaphore(const vk::Device device)
 {
@@ -330,37 +307,7 @@ vk::RenderPass createRenderPass(const vk::Device device, vk::Format format)
 	return returnValueOnSuccess(device.createRenderPass(createInfo));
 }
 
-vk::Framebuffer createFramebuffer(const vk::Device device, vk::RenderPass renderPass, vk::ImageView imageView,
-                                  U32 width, U32 height)
-{
-	const auto createInfo = vk::FramebufferCreateInfo
-	{
-		.renderPass = renderPass,
-		.attachmentCount = 1,
-		.pAttachments = &imageView,
-		.width = width,
-		.height = height,
-		.layers = 1
-	};
-	return returnValueOnSuccess(device.createFramebuffer(createInfo));
-}
 
-vk::ImageView createImageView(const vk::Device device, vk::Image image, vk::Format format)
-{
-	const auto createInfo = vk::ImageViewCreateInfo
-	{
-		.image = image,
-		.viewType = vk::ImageViewType::e2D,
-		.format = format,
-		.subresourceRange = vk::ImageSubresourceRange
-		{ 
-			.aspectMask = vk::ImageAspectFlagBits::eColor,
-			.levelCount = 1,
-			.layerCount = 1
-		}
-	};
-	return returnValueOnSuccess(device.createImageView(createInfo));
-}
 
 
 
@@ -418,76 +365,12 @@ vk::ImageMemoryBarrier imageBarrier(vk::Image image,
 			.layerCount = VK_REMAINING_ARRAY_LAYERS
 		}
 	};
+
+
 }
 
-struct Swapchain
-{
-	vk::SwapchainKHR swapchain;
-	std::vector<vk::Image> images;
-	std::vector<vk::Framebuffer> framebuffers;
-	std::vector<vk::ImageView> imageViews;
 
-	U32 width;
-	U32 height;
-};
 
-void destroySwapchain(const vk::Device device, const Swapchain& swapchain)
-{
-	for (const auto& framebuffer : swapchain.framebuffers)
-	{
-		device.destroy(framebuffer);
-	}
-	for (const auto& imageView : swapchain.imageViews)
-	{
-		device.destroyImageView(imageView);
-	}
-	device.destroySwapchainKHR(swapchain.swapchain);
-}
-
-Swapchain createSwapchain(const vk::Device device, const vk::SurfaceKHR surface,
-                          const vk::SurfaceCapabilitiesKHR surfaceCapabilities, const U32 familyIndex, const U32 width,
-                          const U32 height, const vk::Format format, const vk::RenderPass renderPass,
-                          const vk::SwapchainKHR oldSwapchain)
-{
-	auto swapchain = createSwapchain(device, surface, surfaceCapabilities, familyIndex, width,
-	                                 height, format, oldSwapchain);
-	auto images = returnValueOnSuccess(device.getSwapchainImagesKHR(swapchain));
-	auto views = std::vector<vk::ImageView>{ images.size() };
-	auto framebuffers = std::vector<vk::Framebuffer>{ images.size() };
-	
-	for (U32 i = 0; i < views.size(); i++)
-	{
-		views[i] = createImageView(device, images[i], format);
-	}
-
-	for (U32 i = 0; i < framebuffers.size(); i++)
-	{
-		framebuffers[i] = createFramebuffer(device, renderPass, views[i], width, height);
-	}
-	
-	return Swapchain
-	{
-		.swapchain = swapchain,
-		.images = images,
-		.framebuffers = framebuffers,
-		.imageViews = views,
-		.width = width,
-		.height = height
-	};
-}
-
-void resizeSwapchain(const vk::Device device, const vk::SurfaceKHR surface,
-                     const vk::SurfaceCapabilitiesKHR surfaceCapabilities, const U32 familyIndex, const U32 width,
-                     const U32 height, const vk::Format format, const vk::RenderPass renderPass,
-                     Swapchain& swapchain)
-{
-	const auto oldSwapchain = swapchain;
-
-	const auto newSwapchain = createSwapchain(device, surface, surfaceCapabilities, familyIndex, width, height, format, renderPass, swapchain.swapchain);
-	returnValueOnSuccess(device.waitIdle());
-	destroySwapchain(device, oldSwapchain);
-	swapchain = newSwapchain;
-}
 
 
 struct Vertex
@@ -729,7 +612,7 @@ void destroyBuffer(const Buffer& buffer, const vk::Device device)
 	device.destroyBuffer(buffer.buffer);
 }
 
-VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
+
 
 
 void buildMeshlets(Mesh& mesh)
@@ -797,6 +680,30 @@ vk::QueryPool createQueryPool(const vk::Device& device, U32 poolCount)
 	return returnValueOnSuccess(device.createQueryPool(createInfo));
 }
 
+vk::ImageMemoryBarrier2KHR createImageSynchronizationBarrier(std::vector<vk::Image>::const_reference image, vk::PipelineStageFlagBits2KHR srcStageMask, vk::AccessFlagBits2KHR srcAccessMask,
+	vk::PipelineStageFlagBits2KHR dstStageMask, vk::AccessFlagBits2KHR dstAccessMask, vk::ImageLayout oldLayout, vk::ImageLayout newLayout)
+{
+	return vk::ImageMemoryBarrier2KHR
+	{
+		.srcStageMask = srcStageMask,
+		.srcAccessMask = srcAccessMask,
+		.dstStageMask = dstStageMask,
+		.dstAccessMask = dstAccessMask,
+		.oldLayout = oldLayout,
+		.newLayout = newLayout,
+		.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		.image = image,
+		.subresourceRange =
+		vk::ImageSubresourceRange
+		{
+			.aspectMask = vk::ImageAspectFlagBits::eColor,
+			.levelCount = VK_REMAINING_MIP_LEVELS,
+			.layerCount = VK_REMAINING_ARRAY_LAYERS
+		}
+	};
+}
+
 int main()  // NOLINT(bugprone-exception-escape)
 {
 
@@ -844,7 +751,7 @@ int main()  // NOLINT(bugprone-exception-escape)
 #if defined(_DEBUG)
 	layers.push_back("VK_LAYER_KHRONOS_validation");
 	//provides VK_KHR_synchronization2 extension even if the underlying driver do not provide the extension
-	//layers.push_back("VK_LAYER_KHRONOS_synchronization2");
+	layers.push_back("VK_LAYER_KHRONOS_synchronization2");
 	//layers.push_back("VK_LAYER_NV_nomad_release_public_2021_3_1");
 #endif
 
@@ -880,7 +787,6 @@ int main()  // NOLINT(bugprone-exception-escape)
 	}
 	auto instance = resultValue.value;
 	VULKAN_HPP_DEFAULT_DISPATCHER.init(instance);
-
 	auto debugCallback = registerDebugCallback(instance);
 
 
@@ -918,11 +824,10 @@ int main()  // NOLINT(bugprone-exception-escape)
 	auto format = getSwapchainFormat(physicalDevice, surface);
 
 	auto device = createDevice(physicalDevice, familyIndex, rtxSupported);
-	VULKAN_HPP_DEFAULT_DISPATCHER.init(device);
+	
 	auto width = 0, height = 0;
 	SDL_GetWindowSize(window, &width, &height);
-
-
+	
 
 	auto props = physicalDevice.getProperties();
 	assert(props.limits.timestampComputeAndGraphics);
@@ -935,43 +840,46 @@ int main()  // NOLINT(bugprone-exception-escape)
 	auto releaseSemaphore = createSemaphore(device);
 	auto fence = returnValueOnSuccess(device.createFence({}));
 	
-	auto meshMS = vk::ShaderModule{};
+	tut::shaders::Shader meshMs;
 	if (rtxSupported)
 	{
-		meshMS = tut::shaders::loadShader(device, "shaders/mesh.mesh.spv");
+		meshMs = tut::shaders::loadShader(device, "shaders/mesh.mesh.spv");
 	}
 
 
-	auto meshVS = tut::shaders::loadShader(device, "shaders/triangle.vert.spv");
-	auto meshFS = tut::shaders::loadShader(device, "shaders/mesh.frag.spv");
+	auto meshVs = tut::shaders::loadShader(device, "shaders/triangle.vert.spv");
+	auto meshFs = tut::shaders::loadShader(device, "shaders/mesh.frag.spv");
+
+
 
 	auto pipelineCache = nullptr;
 	auto queue = device.getQueue(familyIndex, 0);
 
 	auto renderPass = createRenderPass(device, format);
-	auto swapchain = createSwapchain(device, surface, surfaceCapabilities, familyIndex, static_cast<U32>(width),
-	                                 static_cast<U32>(height), format, renderPass, nullptr);
+	auto swapchain = tut::swapchain::createSwapchain(device, surface, surfaceCapabilities, familyIndex, static_cast<U32>(width),
+	                                                 static_cast<U32>(height), format, renderPass, nullptr);
 
 
 	auto queryPool = createQueryPool(device, 128);
 
 
-
-	auto meshLayout = tut::shaders::createPipelineLayout(device, false);
-	auto meshLayoutRtx = vk::PipelineLayout{};
-	if(rtxSupported)
-	{
-		meshLayoutRtx = tut::shaders::createPipelineLayout(device, true);
-	}
-
-	auto meshPipeline = tut::shaders::createGraphicsPipeline(device, pipelineCache, renderPass, meshLayout,meshVS, meshFS, false);
+	auto setLayout = tut::shaders::createSetLayout(device, { meshFs, meshVs });
+	auto meshLayout = tut::shaders::createPipelineLayout(device, setLayout);
+	auto descriptorTemplate = tut::shaders::createUpdateTemplate(device, vk::PipelineBindPoint::eGraphics, setLayout, meshLayout, { meshFs, meshVs });
+	auto meshPipeline = tut::shaders::createGraphicsPipeline(device, pipelineCache, renderPass, meshLayout,{meshVs,meshFs});
 	auto meshPipelineRtx = vk::Pipeline{};
+	auto meshLayoutRtx = vk::PipelineLayout{};
+	auto setLayoutRtx = vk::DescriptorSetLayout{};
+	auto descriptorTemplateRtx = vk::DescriptorUpdateTemplate{};
 	if(rtxSupported)
 	{
-		meshPipelineRtx = tut::shaders::createGraphicsPipeline(device, pipelineCache, renderPass, meshLayoutRtx, meshMS, meshFS, true);
+		setLayoutRtx = tut::shaders::createSetLayout(device, { meshFs, meshMs });
+		meshLayoutRtx = tut::shaders::createPipelineLayout(device, setLayoutRtx);
+		meshPipelineRtx = tut::shaders::createGraphicsPipeline(device, pipelineCache, renderPass, meshLayoutRtx, { meshMs,meshFs });
+		descriptorTemplateRtx = tut::shaders::createUpdateTemplate(device, vk::PipelineBindPoint::eGraphics, setLayoutRtx, meshLayoutRtx, { meshFs, meshMs });
 	}
 	
-	
+
 	auto commandPoolCreateInfo = vk::CommandPoolCreateInfo
 	{
 		.flags = vk::CommandPoolCreateFlagBits::eTransient,
@@ -1077,16 +985,21 @@ int main()  // NOLINT(bugprone-exception-escape)
 		returnValueOnSuccess(commandBuffer.begin(beginInfo));
 
 		commandBuffer.resetQueryPool(queryPool, 0,128);
-		commandBuffer.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe, queryPool, 0);
+		commandBuffer.writeTimestamp2KHR(vk::PipelineStageFlagBits2KHR::eBottomOfPipe, queryPool, 0);
 
-		auto renderBeginBarrier = imageBarrier(swapchain.images[imageIndex], static_cast<vk::AccessFlagBits>(0),
-			vk::AccessFlagBits::eColorAttachmentWrite,
+
+		const auto renderBeginBarrier = createImageSynchronizationBarrier(swapchain.images[imageIndex],
+			vk::PipelineStageFlagBits2KHR::eColorAttachmentOutput, vk::AccessFlagBits2KHR::eColorAttachmentWrite,
+			vk::PipelineStageFlagBits2KHR::eColorAttachmentOutput, vk::AccessFlagBits2KHR::eColorAttachmentWrite,
 			vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal);
 
-		commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			vk::DependencyFlagBits::eByRegion, nullptr, nullptr,
-			std::array{ renderBeginBarrier });
+		auto const renderBeginSyncDependency = vk::DependencyInfoKHR
+		{
+			.dependencyFlags = vk::DependencyFlagBits::eByRegion,
+			.imageMemoryBarrierCount = 1,
+			.pImageMemoryBarriers = &renderBeginBarrier
+		};
+		commandBuffer.pipelineBarrier2KHR(renderBeginSyncDependency);
 
 
 
@@ -1117,50 +1030,36 @@ int main()  // NOLINT(bugprone-exception-escape)
 		commandBuffer.setScissor(0, 1, &scissor);
 	
 		
-
-
-		const auto vbInfo = vk::DescriptorBufferInfo
-		{
-			.buffer = vb.buffer,
-			.offset = 0,
-			.range = vk::DeviceSize{ vb.size }
-		};
+		
 		if (rtxEnabled)
 		{
 			commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, meshPipelineRtx);
-
-			const auto mbInfo = vk::DescriptorBufferInfo
-			{
-				.buffer = mb.buffer,
-				.offset = 0,
-				.range = vk::DeviceSize{ mb.size }
-			};
-		
-		
-
+			
 			const auto descriptors = std::array
 			{
-				vk::WriteDescriptorSet
+				tut::shaders::DescriptorInfo
 				{
-					.dstBinding = 0,
-					.descriptorCount = 1,
-					.descriptorType = vk::DescriptorType::eStorageBuffer,
-					.pBufferInfo = &vbInfo
+					.buffer =  vk::DescriptorBufferInfo
+					{
+						vb.buffer,
+						0,
+						vb.size
+					}
 				},
-				vk::WriteDescriptorSet
+				tut::shaders::DescriptorInfo{},
+				tut::shaders::DescriptorInfo
 				{
-					.dstBinding = 1,
-					.descriptorCount = 1,
-					.descriptorType = vk::DescriptorType::eStorageBuffer,
-					.pBufferInfo = &mbInfo
-				}
+					.buffer = vk::DescriptorBufferInfo
+					{
+						mb.buffer,
+						0,
+						mb.size
+					}
+				},
 			};
+			
 
-
-			/*auto descriptorTemplate = vk::DescriptorUpdateTemplate{};
-
-			commandBuffer.pushDescriptorSetWithTemplateKHR(descriptorTemplate, meshLayoutRtx, 0, &descriptors);*/
-			commandBuffer.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, meshLayoutRtx, 0, descriptors);
+			commandBuffer.pushDescriptorSetWithTemplateKHR(descriptorTemplateRtx, meshLayoutRtx, 0, &descriptors);
 
 			for(int i = 0; i < 4000; i++)
 			{
@@ -1173,15 +1072,19 @@ int main()  // NOLINT(bugprone-exception-escape)
 
 			const auto descriptors = std::array
 			{
-				vk::WriteDescriptorSet
+				tut::shaders::DescriptorInfo
 				{
-					.dstBinding = 0,
-					.descriptorCount = 1,
-					.descriptorType = vk::DescriptorType::eStorageBuffer,
-					.pBufferInfo = &vbInfo
+					.buffer = vk::DescriptorBufferInfo
+					{
+						vb.buffer,
+						0,
+						vb.size
+					}
 				}
 			};
-			commandBuffer.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, meshLayout, 0, descriptors);
+
+
+			commandBuffer.pushDescriptorSetWithTemplateKHR(descriptorTemplate, meshLayout, 0, &descriptors);
 
 			auto dummyOffset = vk::DeviceSize{ 0 };
 			commandBuffer.bindIndexBuffer(ib.buffer, dummyOffset, vk::IndexType::eUint32);
@@ -1195,37 +1098,66 @@ int main()  // NOLINT(bugprone-exception-escape)
 
 		commandBuffer.endRenderPass();
 
+		//
+		//auto renderEndBarrier = imageBarrier(swapchain.images[imageIndex],
+		//	vk::AccessFlagBits::eColorAttachmentWrite,
+		//	static_cast<vk::AccessFlagBits>(0), vk::ImageLayout::eUndefined,
+		//	vk::ImageLayout::ePresentSrcKHR);
 
-		auto renderEndBarrier = imageBarrier(swapchain.images[imageIndex],
-			vk::AccessFlagBits::eColorAttachmentWrite,
-			static_cast<vk::AccessFlagBits>(0), vk::ImageLayout::eUndefined,
-			vk::ImageLayout::ePresentSrcKHR);
 
-		commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			vk::PipelineStageFlagBits::eTopOfPipe, vk::DependencyFlagBits::eByRegion,
-			nullptr, nullptr, std::array{ renderEndBarrier });
+		//auto vkCmdPipelineBarrier2KHR =
+		//	reinterpret_cast<PFN_vkCmdPipelineBarrier2KHR>(vkGetInstanceProcAddr(instance, "vkCmdPipelineBarrier2KHR"));
+		
 
-		commandBuffer.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe, queryPool, 1);
+		const auto renderEndBarrier = createImageSynchronizationBarrier(swapchain.images[imageIndex], vk::PipelineStageFlagBits2KHR::eColorAttachmentOutput, vk::AccessFlagBits2KHR::eColorAttachmentWrite,
+			vk::PipelineStageFlagBits2KHR::eAllCommands, vk::AccessFlagBits2KHR::eNone, vk::ImageLayout::eUndefined, vk::ImageLayout::ePresentSrcKHR);
+
+
+		auto const renderEndSyncDependency = vk::DependencyInfoKHR
+		{
+			.dependencyFlags = vk::DependencyFlagBits::eByRegion,
+			.imageMemoryBarrierCount = 1,
+			.pImageMemoryBarriers = &renderEndBarrier
+		};
+		
+		commandBuffer.pipelineBarrier2KHR(renderEndSyncDependency);
+		
+		commandBuffer.writeTimestamp2KHR(vk::PipelineStageFlagBits2KHR::eBottomOfPipe, queryPool, 1);
 
 		returnValueOnSuccess(commandBuffer.end());
 
 
-		auto stageMask = vk::PipelineStageFlags{ vk::PipelineStageFlagBits::eColorAttachmentOutput };
-
-		auto submits = std::array<vk::SubmitInfo, 1>
+		const auto acquireCompleteInfo = vk::SemaphoreSubmitInfoKHR
 		{
-			vk::SubmitInfo
+			.semaphore = acquireSemaphore,
+			.stageMask = vk::PipelineStageFlagBits2KHR::eColorAttachmentOutput
+		};
+
+		const auto renderingCompleteInfo = vk::SemaphoreSubmitInfoKHR
+		{
+			.semaphore = releaseSemaphore,
+			.stageMask = vk::PipelineStageFlagBits2KHR::eColorAttachmentOutput
+		};
+
+		const auto commandBufferSubmitInfo = vk::CommandBufferSubmitInfoKHR
+		{
+			.commandBuffer = commandBuffer
+		};
+
+		const auto submits = std::array
+		{
+			vk::SubmitInfo2KHR
 			{
-				.waitSemaphoreCount = 1,
-				.pWaitSemaphores = &acquireSemaphore,
-				.pWaitDstStageMask = &stageMask,
-				.commandBufferCount = 1,
-				.pCommandBuffers = &commandBuffer,
-				.signalSemaphoreCount = 1,
-				.pSignalSemaphores = &releaseSemaphore
+				.waitSemaphoreInfoCount = 1,
+				.pWaitSemaphoreInfos = &acquireCompleteInfo,
+				.commandBufferInfoCount = 1,
+				.pCommandBufferInfos = &commandBufferSubmitInfo,
+				.signalSemaphoreInfoCount = 1,
+				.pSignalSemaphoreInfos = &renderingCompleteInfo
+
 			}
 		};
-		returnValueOnSuccess(queue.submit(submits));
+		returnValueOnSuccess(queue.submit2KHR(submits));
 
 		auto presentInfo = vk::PresentInfoKHR
 		{
@@ -1237,6 +1169,8 @@ int main()  // NOLINT(bugprone-exception-escape)
 		};
 
 		returnValueOnSuccess(queue.presentKHR(presentInfo));
+
+
 		returnValueOnSuccess(device.waitIdle());
 
 		auto queryResults = std::array<uint64_t, 2>{};
@@ -1288,7 +1222,13 @@ int main()  // NOLINT(bugprone-exception-escape)
 	device.destroyFence(fence);
 	device.destroyCommandPool(commandPool);
 	device.destroyQueryPool(queryPool);
-	//device.destroyDescriptorSetLayout()
+	device.destroyDescriptorSetLayout(setLayout);
+	device.destroyDescriptorUpdateTemplate(descriptorTemplate);
+	if(rtxSupported)
+	{
+		device.destroyDescriptorSetLayout(setLayoutRtx);
+		device.destroyDescriptorUpdateTemplate(descriptorTemplateRtx);
+	}
 	device.destroyPipelineLayout(meshLayout);
 	if(rtxSupported)
 	{
@@ -1302,11 +1242,11 @@ int main()  // NOLINT(bugprone-exception-escape)
 	{
 		device.destroyImageView(imageView);
 	}
-	device.destroyShaderModule(meshFS);
-	device.destroyShaderModule(meshVS);
+	device.destroyShaderModule(meshFs.module);
+	device.destroyShaderModule(meshVs.module);
 	if(rtxSupported)
 	{
-		device.destroyShaderModule(meshMS);
+		device.destroyShaderModule(meshMs.module);
 	}
 	device.destroyRenderPass(renderPass);
 	device.destroy();

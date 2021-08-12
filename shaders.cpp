@@ -2,8 +2,7 @@
 #include "shaders.h"
 
 
-
-vk::ShaderModule tut::shaders::loadShader(const vk::Device device, const char* path)
+tut::shaders::Shader tut::shaders::loadShader(const vk::Device device, const char* path)
 {
 	// ReSharper disable once CppDeprecatedEntity
 	const auto file = fopen(path, "rb");  // NOLINT(clang-diagnostic-deprecated-declarations)
@@ -23,45 +22,45 @@ vk::ShaderModule tut::shaders::loadShader(const vk::Device device, const char* p
 		.pCode = reinterpret_cast<const U32*>(buffer)
 
 	};
-	return returnValueOnSuccess(device.createShaderModule(createInfo));
+
+
+	const auto reflect = spv_reflect::ShaderModule{static_cast<size_t>(length),reinterpret_cast<const U32*>(buffer)};
+	const auto stage = static_cast<vk::ShaderStageFlagBits>(reflect.GetShaderStage());
+
+	auto setLayoutBindings = std::vector<vk::DescriptorSetLayoutBinding>{};
+	auto bindingsCount = U32{};
+	reflect.EnumerateDescriptorBindings(&bindingsCount, nullptr);
+
+	auto descriptorBindings = std::vector<SpvReflectDescriptorBinding*>{bindingsCount};
+	reflect.EnumerateDescriptorBindings(&bindingsCount, descriptorBindings.data());
+
+	for (const auto& descriptorBinding : descriptorBindings)
+	{
+		setLayoutBindings.push_back(
+			vk::DescriptorSetLayoutBinding
+			{
+				.binding = descriptorBinding->binding,
+				.descriptorType = vk::DescriptorType{descriptorBinding->descriptor_type},
+				.descriptorCount = descriptorBinding->count,
+				.stageFlags = stage
+			});
+	}
+
+	return Shader
+	{
+		.module = returnValueOnSuccess(device.createShaderModule(createInfo)),
+		.stage = stage,
+		.setLayoutBindings = setLayoutBindings
+	};
 }
 
-
-vk::PipelineLayout tut::shaders::createPipelineLayout(const vk::Device device, const bool rtxEnabled)
+vk::DescriptorSetLayout tut::shaders::createSetLayout(const vk::Device device, std::initializer_list<std::reference_wrapper<Shader>> shaders)
 {
 	auto setBindings = std::vector<vk::DescriptorSetLayoutBinding>{};
-
-	if (!rtxEnabled)
+	for (const auto& shader : shaders)
 	{
-		setBindings.push_back(vk::DescriptorSetLayoutBinding
-			{
-				.binding = 0,
-				.descriptorType = vk::DescriptorType::eStorageBuffer,
-				.descriptorCount = 1,
-				.stageFlags = vk::ShaderStageFlagBits::eVertex
-			});
+		setBindings.insert(setBindings.end(), shader.get().setLayoutBindings.begin(), shader.get().setLayoutBindings.end());
 	}
-	else
-	{
-		setBindings.push_back(vk::DescriptorSetLayoutBinding
-			{
-				.binding = 0,
-				.descriptorType = vk::DescriptorType::eStorageBuffer,
-				.descriptorCount = 1,
-				.stageFlags = vk::ShaderStageFlagBits::eMeshNV
-			});
-		setBindings.push_back(vk::DescriptorSetLayoutBinding
-			{
-				.binding = 1,
-				.descriptorType = vk::DescriptorType::eStorageBuffer,
-				.descriptorCount = 1,
-				.stageFlags = vk::ShaderStageFlagBits::eMeshNV
-			});
-
-	}
-
-
-
 	const auto setLayoutCreateInfo = vk::DescriptorSetLayoutCreateInfo
 	{
 		.flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
@@ -69,80 +68,82 @@ vk::PipelineLayout tut::shaders::createPipelineLayout(const vk::Device device, c
 		.pBindings = setBindings.data()
 	};
 
-	const auto descriptorSetLayout =
-		returnValueOnSuccess(device.createDescriptorSetLayout(setLayoutCreateInfo));
+	return returnValueOnSuccess(device.createDescriptorSetLayout(setLayoutCreateInfo));
+}
 
+vk::PipelineLayout tut::shaders::createPipelineLayout(const vk::Device device, const vk::DescriptorSetLayout setLayout)
+{
+	
 	const auto createInfo = vk::PipelineLayoutCreateInfo
 	{
 		.setLayoutCount = 1,
-		.pSetLayouts = &descriptorSetLayout
+		.pSetLayouts = &setLayout
 	};
 	const auto layout = returnValueOnSuccess(device.createPipelineLayout(createInfo));
-
-	//device.destroyDescriptorSetLayout(descriptorSetLayout);
 
 	return layout;
 }
 
-vk::Pipeline tut::shaders::createGraphicsPipeline(vk::Device device, vk::PipelineCache pipelineCache, vk::RenderPass renderPass,
-	vk::PipelineLayout pipelineLayout, vk::ShaderModule triangleVertexShader,
-	vk::ShaderModule triangleFragmentShader, const bool rtxEnabled)
+vk::DescriptorUpdateTemplate tut::shaders::createUpdateTemplate(const vk::Device device, const vk::PipelineBindPoint bindPoint,
+	const vk::DescriptorSetLayout setLayout, const vk::PipelineLayout layout, std::initializer_list<std::reference_wrapper<Shader>> shaders)
 {
-	auto stages = std::array
+
+	auto setBindings = std::vector<vk::DescriptorSetLayoutBinding>{};
+	for (const auto& shader : shaders)
 	{
-		vk::PipelineShaderStageCreateInfo
-		{
-			.stage = rtxEnabled ? vk::ShaderStageFlagBits::eMeshNV : vk::ShaderStageFlagBits::eVertex,
-			.module = triangleVertexShader,
-			.pName = "main"
-		},
-		vk::PipelineShaderStageCreateInfo
-		{
-			.stage = vk::ShaderStageFlagBits::eFragment,
-			.module = triangleFragmentShader,
-			.pName = "main"
-		}
+		setBindings.insert(setBindings.end(), shader.get().setLayoutBindings.begin(), shader.get().setLayoutBindings.end());
+	}
+	
+	auto entries = std::vector<vk::DescriptorUpdateTemplateEntry>{};
+
+
+	for (const auto& binding : setBindings)
+	{
+		entries.push_back(
+			vk::DescriptorUpdateTemplateEntry
+			{
+				binding.binding,
+				0,
+				binding.descriptorCount,
+				vk::DescriptorType::eStorageBuffer,
+				sizeof(tut::shaders::DescriptorInfo) * binding.binding,
+				sizeof(tut::shaders::DescriptorInfo)
+			}
+		);
+	}
+
+	const auto createInfo = vk::DescriptorUpdateTemplateCreateInfo
+	{
+		.descriptorUpdateEntryCount = static_cast<U32>(entries.size()),
+		.pDescriptorUpdateEntries = entries.data(),
+		.templateType = vk::DescriptorUpdateTemplateType::ePushDescriptorsKHR,
+		.descriptorSetLayout = setLayout,
+		.pipelineBindPoint = bindPoint,
+		.pipelineLayout = layout,
+		.set = 0
+	};
+	return returnValueOnSuccess(device.createDescriptorUpdateTemplate(createInfo));
+}
+
+vk::Pipeline tut::shaders::createGraphicsPipeline(vk::Device device, vk::PipelineCache pipelineCache, vk::RenderPass renderPass,
+                                                  vk::PipelineLayout pipelineLayout, std::initializer_list<std::reference_wrapper<Shader>> shaders)
+{
+	
+
+	auto stages = std::vector<vk::PipelineShaderStageCreateInfo>{};
+	for (auto shader : shaders)
+	{
+		stages.push_back(
+			vk::PipelineShaderStageCreateInfo
+			{
+				.stage = shader.get().stage,
+				.module = shader.get().module,
+				.pName = "main"
+			}
+		);
 	};
 
-	/*const auto stream = vk::VertexInputBindingDescription
-	{
-		.binding = 0,
-		.stride = 32,
-		.inputRate = vk::VertexInputRate::eVertex
-	};
-
-	const auto attrs = std::array
-	{
-		vk::VertexInputAttributeDescription
-		{
-			.location = 0,
-			.binding = 0,
-			.format = vk::Format::eR32G32B32Sfloat,
-			.offset = 0
-		},
-		vk::VertexInputAttributeDescription
-		{
-			.location = 1,
-			.binding = 0,
-			.format = vk::Format::eR32G32B32Sfloat,
-			.offset = 12
-		},
-		vk::VertexInputAttributeDescription
-		{
-			.location = 2,
-			.binding = 0,
-			.format = vk::Format::eR32G32Sfloat,
-			.offset = 24
-		},
-
-	};
-	const auto vertexInput = vk::PipelineVertexInputStateCreateInfo
-	{
-		.vertexBindingDescriptionCount = 1,
-		.pVertexBindingDescriptions = &stream,
-		.vertexAttributeDescriptionCount = attrs.size(),
-		.pVertexAttributeDescriptions = attrs.data()
-	};*/
+	
 	const auto vertexInput = vk::PipelineVertexInputStateCreateInfo
 	{
 	};

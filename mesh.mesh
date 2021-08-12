@@ -18,7 +18,7 @@ layout(binding = 0) readonly buffer Verticies
 
 
 
-layout(binding = 1) readonly buffer Meshlets
+layout(binding = 2) readonly buffer Meshlets
 {
 	Meshlet meshlets[];
 };
