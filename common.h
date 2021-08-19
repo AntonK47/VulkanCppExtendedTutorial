@@ -15,6 +15,9 @@
 #include <vulkan/vulkan.hpp>
 #pragma warning(pop)
 
+VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
+
+
 template<typename T>
 T returnValueOnSuccess(const vk::ResultValue<T>& call) { assert(call.result == vk::Result::eSuccess); return call.value; }
 

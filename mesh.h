@@ -2,6 +2,7 @@
 
 struct Meshlet
 {
+	vec4 cone;
 	uint32_t vertices[64];
 	uint8_t indices[126 * 3];
 	uint8_t triangleCount;

@@ -18,7 +18,7 @@ layout(binding = 0) readonly buffer Verticies
 
 
 
-layout(binding = 2) readonly buffer Meshlets
+layout(binding = 1) readonly buffer Meshlets
 {
 	Meshlet meshlets[];
 };
@@ -40,13 +40,29 @@ uint hash(uint a)
    return a;
 }
 
+bool coneCull(vec4 cone, vec3 view)
+{
+	vec3 coneNormal = cone.xyz;
+	float coneCosAngle = cone.w;
+
+	return dot(coneNormal, view) > coneCosAngle;
+}
+
 void main()
 {
 
 	uint mi = gl_WorkGroupID.x;
-
-
 	uint ti = gl_LocalInvocationID.x;
+
+
+	if(coneCull(meshlets[mi].cone, vec3(0,0,1)))
+	{
+		if(ti == 0)
+		{
+			gl_PrimitiveCountNV = 0;
+		}
+		return;
+	}
 
 	uint vertexCount = uint(meshlets[mi].vertexCount);
 	uint triangleCount = uint(meshlets[mi].triangleCount);

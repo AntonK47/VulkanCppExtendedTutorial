@@ -161,7 +161,7 @@ vk::Pipeline tut::shaders::createGraphicsPipeline(vk::Device device, vk::Pipelin
 
 	auto rasterization = vk::PipelineRasterizationStateCreateInfo
 	{
-		.cullMode = vk::CullModeFlagBits::eBack,
+		.cullMode = vk::CullModeFlagBits::eFront,
 		.lineWidth = 1.0f
 	};
 	auto multisample = vk::PipelineMultisampleStateCreateInfo

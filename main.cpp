@@ -20,8 +20,6 @@
 
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1  // NOLINT(cppcoreguidelines-macro-usage)
 
-#include <compare>
-
 #pragma warning(push)
 #pragma warning( disable : 26819 )
 #pragma warning( disable : 26451 )
@@ -48,10 +46,8 @@
 #include "spirv_reflect.h"
 #include "shaders.h"
 #include "swapchain.h"
-#include "spirv_reflect.h"
 
 
-VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE;
 
 void setupConsole(const std::wstring& title)
 {
@@ -380,8 +376,9 @@ struct Vertex
 	uint16_t tu, tv;
 };
 
-struct Meshlet
+struct alignas(16) Meshlet
 {
+	float cone[4];
 	uint32_t vertices[64];
 	uint8_t indices[126*3];
 	uint8_t triangleCount;
@@ -394,6 +391,106 @@ struct Mesh
 	std::vector<U32> indices;
 	std::vector<Meshlet> meshlets;
 };
+
+float halfToFloat(uint16_t v)
+{
+	const uint16_t sign = v >> 15;
+	const uint16_t exp = (v >> 10) & 31;
+	const uint16_t mant = v & 1023;
+
+	assert(exp != 31);
+
+	if(exp == 0)
+	{
+		assert(mant == 0);
+		return 0.0f;
+	}
+	else
+	{
+		return (sign ? -1.0f : 1.0f) * ldexpf(static_cast<float>(mant + 1024) / 1024.0f, exp - 15);
+	}
+}
+
+void buildMeshletsCones(Mesh& mesh)
+{
+	for(auto& meshlet : mesh.meshlets)
+	{
+		float normals[126][3] = {};
+
+		for(U32 i = 0; i < meshlet.triangleCount; i++)
+		{
+			const U32 a = meshlet.indices[i * 3 + 0];
+			const U32 b = meshlet.indices[i * 3 + 1];
+			const U32 c = meshlet.indices[i * 3 + 2];
+
+			const auto& va = mesh.vertices[meshlet.vertices[a]];
+			const auto& vb = mesh.vertices[meshlet.vertices[b]];
+			const auto& vc = mesh.vertices[meshlet.vertices[c]];
+
+			const float p0[3] = { halfToFloat(va.vx), halfToFloat(va.vy), halfToFloat(va.vz) };
+			const float p1[3] = { halfToFloat(vb.vx), halfToFloat(vb.vy), halfToFloat(vb.vz) };
+			const float p2[3] = { halfToFloat(vc.vx), halfToFloat(vc.vy), halfToFloat(vc.vz) };
+
+			const float p10[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
+			const float p20[3] = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
+
+			const float normalX = p10[1] * p20[2] - p10[2] * p20[1];
+			const float normalY = p10[2] * p20[0] - p10[0] * p20[2];
+			const float normalZ = p10[0] * p20[1] - p10[1] * p20[0];
+
+			const float length = sqrtf(normalX * normalX + normalY * normalY + normalZ * normalZ);
+
+			const float invLength = length == 0.0f ? 0.0f : 1 / length;
+
+			normals[i][0] = normalX * invLength;
+			normals[i][1] = normalY * invLength;
+			normals[i][2] = normalZ * invLength;
+		}
+
+		float avgNormal[3] = {};
+
+		for (U32 i = 0; i < meshlet.triangleCount; i++)
+		{
+			avgNormal[0] += normals[i][0];
+			avgNormal[1] += normals[i][1];
+			avgNormal[2] += normals[i][2];
+		}
+
+		const float avgLength = sqrtf(avgNormal[0] * avgNormal[0] + avgNormal[1] * avgNormal[1] + avgNormal[2] * avgNormal[2]);
+
+
+		if(avgLength == 0.0f)
+		{
+			avgNormal[0] = 1.0f;
+			avgNormal[1] = 0.0f;
+			avgNormal[2] = 0.0f;
+		}
+		else
+		{
+			avgNormal[0] /= avgLength;
+			avgNormal[1] /= avgLength;
+			avgNormal[2] /= avgLength;
+		}
+
+		// ReSharper disable once IdentifierTypo
+		float mindp = 1.0f;
+		for (U32 i = 0; i < meshlet.triangleCount; i++)
+		{
+			float dp = normals[i][0] * avgNormal[0] + normals[i][1] * avgNormal[1] + normals[i][2] * avgNormal[2];
+
+			mindp = std::min(mindp, dp);
+		}
+
+		meshlet.cone[0] = avgNormal[0];
+		meshlet.cone[1] = avgNormal[1];
+		meshlet.cone[2] = avgNormal[2];
+		if (mindp <= 0.0f)
+			meshlet.cone[3] = 1.0f;
+		else
+			meshlet.cone[3] = sqrtf(1.0f - mindp * mindp);
+
+	}
+}
 
 Mesh loadMesh(const char* path)
 {
@@ -517,27 +614,18 @@ Buffer createBuffer(const vk::Device device, const vk::PhysicalDeviceMemoryPrope
 
 	returnValueOnSuccess(device.bindBufferMemory(buffer, memory, 0));
 
+	void* data = 0;
 	if(memoryPropertyFlags & vk::MemoryPropertyFlagBits::eHostVisible)
 	{
-		auto dataPtr = returnValueOnSuccess(device.mapMemory(memory, 0, memoryRequirements.size));
-		return Buffer
-		{
-			.buffer = buffer,
-			.memory = memory,
-			.data = dataPtr,// std::make_unique<void*>(dataPtr),
-			.size = static_cast<U32>(memoryRequirements.size)
-		};
+		data = returnValueOnSuccess(device.mapMemory(memory, 0, size));
 	}
-
-
-
 
 	return Buffer
 	{
 		.buffer = buffer,
 		.memory = memory,
-		.data = nullptr,// dataPtr,// std::make_unique<void*>(dataPtr),
-		.size = static_cast<U32>(memoryRequirements.size)
+		.data = data,
+		.size = size
 	};
 }
 
@@ -900,6 +988,7 @@ int main()  // NOLINT(bugprone-exception-escape)
 	if (rtxSupported)
 	{
 		buildMeshlets(mesh);
+		buildMeshletsCones(mesh);
 	}
 
 
@@ -1046,7 +1135,6 @@ int main()  // NOLINT(bugprone-exception-escape)
 						vb.size
 					}
 				},
-				tut::shaders::DescriptorInfo{},
 				tut::shaders::DescriptorInfo
 				{
 					.buffer = vk::DescriptorBufferInfo
@@ -1097,16 +1185,6 @@ int main()  // NOLINT(bugprone-exception-escape)
 		}
 
 		commandBuffer.endRenderPass();
-
-		//
-		//auto renderEndBarrier = imageBarrier(swapchain.images[imageIndex],
-		//	vk::AccessFlagBits::eColorAttachmentWrite,
-		//	static_cast<vk::AccessFlagBits>(0), vk::ImageLayout::eUndefined,
-		//	vk::ImageLayout::ePresentSrcKHR);
-
-
-		//auto vkCmdPipelineBarrier2KHR =
-		//	reinterpret_cast<PFN_vkCmdPipelineBarrier2KHR>(vkGetInstanceProcAddr(instance, "vkCmdPipelineBarrier2KHR"));
 		
 
 		const auto renderEndBarrier = createImageSynchronizationBarrier(swapchain.images[imageIndex], vk::PipelineStageFlagBits2KHR::eColorAttachmentOutput, vk::AccessFlagBits2KHR::eColorAttachmentWrite,
